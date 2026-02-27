@@ -15,7 +15,8 @@ import { SettingsDialog } from "./features/settings/SettingsDialog";
 import {
   persistAppSettings,
   readAppSettings,
-  type AppSettings
+  type AppSettings,
+  type AppTheme
 } from "./features/settings/appSettings";
 
 export default function App() {
@@ -75,6 +76,15 @@ export default function App() {
     persistAppSettings(bootstrap.host, appSettings);
   }, [bootstrap.host, appSettings]);
 
+  useEffect(() => {
+    if (typeof document === "undefined") {
+      return;
+    }
+
+    document.documentElement.dataset.theme = appSettings.theme;
+    document.documentElement.style.colorScheme = appSettings.theme;
+  }, [appSettings.theme]);
+
   const isComboboxEnabled =
     state === "open" &&
     hdcBinConfig.available &&
@@ -117,6 +127,13 @@ export default function App() {
     setAppSettings((current) => ({
       ...current,
       hilogHistoryLimit: limit
+    }));
+  }, []);
+
+  const saveTheme = useCallback((theme: AppTheme) => {
+    setAppSettings((current) => ({
+      ...current,
+      theme
     }));
   }, []);
 
@@ -197,6 +214,7 @@ export default function App() {
         source={hdcBinConfig.source}
         message={hdcBinConfig.message}
         hilogHistoryLimit={appSettings.hilogHistoryLimit}
+        theme={appSettings.theme}
         onClose={() => {
           setSettingsOpen(false);
         }}
@@ -209,6 +227,7 @@ export default function App() {
           await hdcBinConfig.refresh();
         }}
         onSaveHilogHistoryLimit={saveHilogHistoryLimit}
+        onSaveTheme={saveTheme}
       />
     </main>
   );

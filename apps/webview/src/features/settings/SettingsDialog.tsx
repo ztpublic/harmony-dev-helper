@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import {
   MAX_HILOG_HISTORY_LIMIT,
   MIN_HILOG_HISTORY_LIMIT,
+  type AppTheme,
   normalizeHilogHistoryLimit
 } from "./appSettings";
 
@@ -15,10 +16,12 @@ interface SettingsDialogProps {
   source: BinConfigSource;
   message?: string;
   hilogHistoryLimit: number;
+  theme: AppTheme;
   onClose: () => void;
   onSaveHdcPath: (path: string) => Promise<void>;
   onClearHdcPath: () => Promise<void>;
   onSaveHilogHistoryLimit: (limit: number) => void;
+  onSaveTheme: (theme: AppTheme) => void;
 }
 
 function sourceLabel(source: BinConfigSource): string {
@@ -51,10 +54,12 @@ export function SettingsDialog({
   source,
   message,
   hilogHistoryLimit,
+  theme,
   onClose,
   onSaveHdcPath,
   onClearHdcPath,
-  onSaveHilogHistoryLimit
+  onSaveHilogHistoryLimit,
+  onSaveTheme
 }: SettingsDialogProps) {
   const [inputPath, setInputPath] = useState("");
   const [localError, setLocalError] = useState<string>();
@@ -93,6 +98,43 @@ export function SettingsDialog({
             X
           </button>
         </div>
+
+        <section className="settings-section">
+          <h3 className="settings-section-title">Appearance</h3>
+          <fieldset className="settings-fieldset">
+            <legend className="settings-label">Theme</legend>
+
+            <div className="settings-theme-options" role="radiogroup" aria-label="Theme">
+              <label className="settings-radio-option">
+                <input
+                  type="radio"
+                  name="settings-theme"
+                  value="dark"
+                  checked={theme === "dark"}
+                  onChange={() => {
+                    onSaveTheme("dark");
+                  }}
+                />
+                <span>Dark</span>
+              </label>
+
+              <label className="settings-radio-option">
+                <input
+                  type="radio"
+                  name="settings-theme"
+                  value="light"
+                  checked={theme === "light"}
+                  onChange={() => {
+                    onSaveTheme("light");
+                  }}
+                />
+                <span>Light</span>
+              </label>
+            </div>
+          </fieldset>
+
+          <p className="settings-hint">Theme applies immediately.</p>
+        </section>
 
         <section className="settings-section">
           <h3 className="settings-section-title">HDC</h3>
