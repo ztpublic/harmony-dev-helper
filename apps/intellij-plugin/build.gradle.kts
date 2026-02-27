@@ -10,10 +10,6 @@ repositories {
   mavenCentral()
 }
 
-dependencies {
-  implementation("org.java-websocket:Java-WebSocket:1.5.6")
-}
-
 intellij {
   version.set("2024.3")
   type.set("IC")

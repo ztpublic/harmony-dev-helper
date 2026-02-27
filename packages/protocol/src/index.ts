@@ -13,12 +13,54 @@ export interface Envelope<TType extends string, TPayload> {
   ts: number;
 }
 
-export type ClientMessage =
-  | Envelope<"invoke", { action: string; args?: Record<string, unknown> }>;
+export interface HostCapabilities {
+  "host.getCapabilities": boolean;
+  "hdc.listTargets": boolean;
+  "hdc.getParameters": boolean;
+  "hdc.shell": boolean;
+}
+
+export type InvokeAction = "host.getCapabilities" | "hdc.listTargets" | "hdc.getParameters" | "hdc.shell";
+
+export interface InvokeArgsByAction {
+  "host.getCapabilities": Record<string, never>;
+  "hdc.listTargets": Record<string, never>;
+  "hdc.getParameters": { connectKey: string };
+  "hdc.shell": { connectKey: string; command: string };
+}
+
+export interface InvokeResultByAction {
+  "host.getCapabilities": { capabilities: HostCapabilities };
+  "hdc.listTargets": { targets: string[] };
+  "hdc.getParameters": { parameters: Record<string, string> };
+  "hdc.shell": { output: string };
+}
+
+type InvokePayload = {
+  [A in InvokeAction]: {
+    action: A;
+    args: InvokeArgsByAction[A];
+  };
+}[InvokeAction];
+
+export type ClientMessage = Envelope<"invoke", InvokePayload>;
+
+type InvokeEventPayload = {
+  [A in InvokeAction]: {
+    name: `${A}.result`;
+    data: InvokeResultByAction[A];
+  };
+}[InvokeAction];
 
 export type HostMessage =
-  | Envelope<"event", { name: string; data?: Record<string, unknown> }>
+  | Envelope<"event", InvokeEventPayload | { name: string; data?: Record<string, unknown> }>
   | Envelope<"error", { code: string; message: string }>;
+
+export function actionResultEventName<TAction extends InvokeAction>(
+  action: TAction
+): `${TAction}.result` {
+  return `${action}.result` as `${TAction}.result`;
+}
 
 export function createEnvelope<TType extends string, TPayload>(
   type: TType,

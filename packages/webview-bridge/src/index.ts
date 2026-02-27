@@ -1,9 +1,26 @@
-import type { BridgeBootstrap, ClientMessage, HarmonyHost, HostMessage } from "@harmony/protocol";
+import {
+  actionResultEventName,
+  createEnvelope,
+  type BridgeBootstrap,
+  type ClientMessage,
+  type HarmonyHost,
+  type HostMessage,
+  type InvokeAction,
+  type InvokeArgsByAction,
+  type InvokeResultByAction
+} from "@harmony/protocol";
 
 export type ConnectionState = "idle" | "connecting" | "open" | "closed" | "error";
 
 type StatusListener = (state: ConnectionState) => void;
 type MessageListener = (message: HostMessage) => void;
+
+interface PendingInvoke {
+  action: InvokeAction;
+  resolve: (result: unknown) => void;
+  reject: (error: Error) => void;
+  timeoutHandle: ReturnType<typeof setTimeout>;
+}
 
 interface LocationLike {
   search: string;
@@ -15,6 +32,12 @@ interface WindowLike {
   acquireVsCodeApi?: () => unknown;
   location?: LocationLike;
 }
+
+export interface InvokeOptions {
+  timeoutMs?: number;
+}
+
+const DEFAULT_INVOKE_TIMEOUT_MS = 8_000;
 
 function parseQueryBootstrap(locationLike?: LocationLike): BridgeBootstrap | undefined {
   if (!locationLike) {
@@ -59,6 +82,7 @@ export class HarmonyWebSocketClient {
   private state: ConnectionState = "idle";
   private readonly statusListeners = new Set<StatusListener>();
   private readonly messageListeners = new Set<MessageListener>();
+  private readonly pendingInvokes = new Map<string, PendingInvoke>();
 
   constructor(bootstrap: BridgeBootstrap) {
     this.bootstrap = bootstrap;
@@ -78,6 +102,7 @@ export class HarmonyWebSocketClient {
 
     this.socket.addEventListener("close", () => {
       this.setState("closed");
+      this.rejectPendingInvokes("WebSocket closed before invoke resolved");
     });
 
     this.socket.addEventListener("error", () => {
@@ -87,19 +112,19 @@ export class HarmonyWebSocketClient {
     this.socket.addEventListener("message", (event) => {
       try {
         const parsed = JSON.parse(event.data as string) as HostMessage;
+        this.handleHostMessage(parsed);
         this.messageListeners.forEach((listener) => listener(parsed));
       } catch {
-        this.messageListeners.forEach((listener) =>
-          listener({
-            id: "decode-error",
-            type: "error",
-            payload: {
-              code: "DECODE_ERROR",
-              message: "Received non-protocol websocket payload"
-            },
-            ts: Date.now()
-          })
-        );
+        const decodeError: HostMessage = {
+          id: "decode-error",
+          type: "error",
+          payload: {
+            code: "DECODE_ERROR",
+            message: "Received non-protocol websocket payload"
+          },
+          ts: Date.now()
+        };
+        this.messageListeners.forEach((listener) => listener(decodeError));
       }
     });
   }
@@ -110,6 +135,41 @@ export class HarmonyWebSocketClient {
     }
 
     this.socket.send(JSON.stringify(message));
+  }
+
+  invoke<TAction extends InvokeAction>(
+    action: TAction,
+    args: InvokeArgsByAction[TAction],
+    options?: InvokeOptions
+  ): Promise<InvokeResultByAction[TAction]> {
+    if (!this.socket || this.socket.readyState !== WebSocket.OPEN) {
+      return Promise.reject(new Error("WebSocket is not open"));
+    }
+
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_INVOKE_TIMEOUT_MS;
+    const message = createEnvelope("invoke", { action, args }) as ClientMessage;
+
+    return new Promise<InvokeResultByAction[TAction]>((resolve, reject) => {
+      const timeoutHandle = setTimeout(() => {
+        this.pendingInvokes.delete(message.id);
+        reject(new Error(`Invoke timed out for action ${action} (${timeoutMs}ms)`));
+      }, timeoutMs);
+
+      this.pendingInvokes.set(message.id, {
+        action,
+        resolve: (result) => resolve(result as InvokeResultByAction[TAction]),
+        reject,
+        timeoutHandle
+      });
+
+      try {
+        this.socket?.send(JSON.stringify(message));
+      } catch (error) {
+        clearTimeout(timeoutHandle);
+        this.pendingInvokes.delete(message.id);
+        reject(error instanceof Error ? error : new Error(String(error)));
+      }
+    });
   }
 
   onStatus(listener: StatusListener): () => void {
@@ -131,10 +191,47 @@ export class HarmonyWebSocketClient {
     this.socket?.close();
     this.socket = undefined;
     this.setState("closed");
+    this.rejectPendingInvokes("WebSocket client disposed before invoke resolved");
   }
 
   private setState(next: ConnectionState): void {
     this.state = next;
     this.statusListeners.forEach((listener) => listener(next));
+  }
+
+  private handleHostMessage(message: HostMessage): void {
+    const pending = this.pendingInvokes.get(message.id);
+    if (!pending) {
+      return;
+    }
+
+    clearTimeout(pending.timeoutHandle);
+    this.pendingInvokes.delete(message.id);
+
+    if (message.type === "error") {
+      pending.reject(new Error(`[${message.payload.code}] ${message.payload.message}`));
+      return;
+    }
+
+    const expectedEventName = actionResultEventName(pending.action);
+    if (message.payload.name !== expectedEventName) {
+      pending.reject(
+        new Error(
+          `Unexpected invoke result for ${pending.action}: expected ${expectedEventName}, got ${message.payload.name}`
+        )
+      );
+      return;
+    }
+
+    pending.resolve(message.payload.data ?? {});
+  }
+
+  private rejectPendingInvokes(reason: string): void {
+    for (const pending of this.pendingInvokes.values()) {
+      clearTimeout(pending.timeoutHandle);
+      pending.reject(new Error(reason));
+    }
+
+    this.pendingInvokes.clear();
   }
 }

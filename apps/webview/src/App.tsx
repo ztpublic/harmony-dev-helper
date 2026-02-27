@@ -1,48 +1,79 @@
 import { HarmonyWebSocketClient, type ConnectionState, resolveBootstrap } from "@harmony/webview-bridge";
 import { useEffect, useMemo, useState } from "react";
-import { ConnectionStatus } from "./components/ConnectionStatus";
+import { useHdcDeviceSelection } from "./features/hdc/useHdcDeviceSelection";
 
 export default function App() {
   const bootstrap = useMemo(() => resolveBootstrap(window), []);
   const [state, setState] = useState<ConnectionState>("idle");
-  const [lastMessageType, setLastMessageType] = useState<string>();
+  const [client, setClient] = useState<HarmonyWebSocketClient>();
 
   useEffect(() => {
-    const client = new HarmonyWebSocketClient(bootstrap);
+    const websocketClient = new HarmonyWebSocketClient(bootstrap);
+    setClient(websocketClient);
 
-    const offStatus = client.onStatus(setState);
-    const offMessage = client.onMessage((message) => {
-      setLastMessageType(message.type);
-    });
+    const offStatus = websocketClient.onStatus(setState);
 
-    client.connect();
+    websocketClient.connect();
 
     return () => {
       offStatus();
-      offMessage();
-      client.dispose();
+      websocketClient.dispose();
+      setClient(undefined);
     };
   }, [bootstrap]);
 
+  const deviceSelection = useHdcDeviceSelection({
+    client,
+    connectionState: state
+  });
+
+  const isComboboxEnabled =
+    state === "open" &&
+    deviceSelection.isSupported &&
+    !deviceSelection.isRefreshing &&
+    deviceSelection.devices.length > 0;
+
+  const placeholder = (() => {
+    if (state !== "open") {
+      return "Connecting...";
+    }
+
+    if (!deviceSelection.isSupported) {
+      return "HDC unsupported in this host";
+    }
+
+    if (deviceSelection.isRefreshing || deviceSelection.status === "loading") {
+      return "Loading devices...";
+    }
+
+    if (deviceSelection.status === "error") {
+      return "Failed to load devices";
+    }
+
+    return "No devices found";
+  })();
+
   return (
-    <main className="app-shell">
-      <header>
-        <p className="kicker">Harmony</p>
-        <h1>Dev Helper</h1>
-        <p>Shared webview shell is connected and ready for formal feature modules.</p>
-      </header>
-
-      <ConnectionStatus
-        host={bootstrap.host}
-        wsUrl={bootstrap.wsUrl}
-        state={state}
-        lastMessageType={lastMessageType}
-      />
-
-      <section className="panel">
-        <h2>Workspace</h2>
-        <p>No feature panels are loaded yet.</p>
-      </section>
+    <main className="app-shell app-shell-compact">
+      <select
+        className="hdc-device-combobox"
+        aria-label="HDC device selection"
+        value={deviceSelection.selectedDevice ?? ""}
+        disabled={!isComboboxEnabled}
+        onChange={(event) => {
+          deviceSelection.selectDevice(event.target.value);
+        }}
+      >
+        {deviceSelection.devices.length === 0 ? (
+          <option value="">{placeholder}</option>
+        ) : (
+          deviceSelection.devices.map((device) => (
+            <option key={device} value={device}>
+              {device}
+            </option>
+          ))
+        )}
+      </select>
     </main>
   );
 }

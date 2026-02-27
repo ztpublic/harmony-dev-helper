@@ -23,13 +23,11 @@
     "lint": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@harmony/protocol": "workspace:*",
-    "ws": "^8.18.1"
+    "@harmony/protocol": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.13.10",
     "@types/vscode": "^1.95.0",
-    "@types/ws": "^8.5.14",
     "typescript": "^5.8.2"
   }
 }

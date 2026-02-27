@@ -1,5 +1,6 @@
 package dev.harmony.plugin
 
+import com.intellij.openapi.Disposable
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ToolWindowFactory
@@ -23,10 +24,14 @@ class HarmonyToolWindowFactory : ToolWindowFactory {
       return
     }
 
-    HarmonyWebSocketBridge.startIfNeeded()
+    try {
+      HarmonyWebSocketBridge.startIfNeeded()
+    } catch (error: Exception) {
+      println("Harmony HDC bridge startup failed: ${error.message}")
+    }
 
     val baseUrl = System.getProperty("harmony.webview.url") ?: HarmonyWebviewServer.startIfNeeded()
-    val wsUrl = "ws://127.0.0.1:${HarmonyWebSocketBridge.port()}"
+    val wsUrl = HarmonyWebSocketBridge.wsUrl()
     val encodedWsUrl = URLEncoder.encode(wsUrl, StandardCharsets.UTF_8)
     val fullUrl = "$baseUrl?host=intellij&wsUrl=$encodedWsUrl"
 
@@ -34,6 +39,13 @@ class HarmonyToolWindowFactory : ToolWindowFactory {
     panel.add(browser.component, BorderLayout.CENTER)
 
     val content = ContentFactory.getInstance().createContent(panel, "", false)
+    content.setDisposer(object : Disposable {
+      override fun dispose() {
+        browser.dispose()
+        HarmonyWebSocketBridge.stop()
+      }
+    })
+
     toolWindow.contentManager.addContent(content)
   }
 }
