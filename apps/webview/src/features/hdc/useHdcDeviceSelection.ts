@@ -6,6 +6,7 @@ import type { DeviceSelectionState } from "./types";
 interface UseHdcDeviceSelectionArgs {
   client?: HarmonyWebSocketClient;
   connectionState: ConnectionState;
+  hdcAvailable?: boolean;
   pollMs?: number;
 }
 
@@ -27,6 +28,7 @@ function toErrorMessage(error: unknown): string {
 export function useHdcDeviceSelection({
   client,
   connectionState,
+  hdcAvailable,
   pollMs = DEFAULT_POLL_MS
 }: UseHdcDeviceSelectionArgs): UseHdcDeviceSelectionResult {
   const [capabilities, setCapabilities] = useState<HostCapabilities | null>(null);
@@ -74,12 +76,12 @@ export function useHdcDeviceSelection({
   }, [client, connectionState, syncDevices]);
 
   const refresh = useCallback(async () => {
-    if (!isSupported) {
+    if (!isSupported || hdcAvailable === false) {
       return;
     }
 
     await listTargets();
-  }, [isSupported, listTargets]);
+  }, [isSupported, hdcAvailable, listTargets]);
 
   useEffect(() => {
     let cancelled = false;
@@ -112,6 +114,13 @@ export function useHdcDeviceSelection({
           return;
         }
 
+        if (hdcAvailable === false) {
+          setStatus("idle");
+          setDevices([]);
+          setSelectedDevice(null);
+          return;
+        }
+
         await listTargets();
       } catch (error) {
         if (cancelled) {
@@ -128,10 +137,10 @@ export function useHdcDeviceSelection({
     return () => {
       cancelled = true;
     };
-  }, [client, connectionState, listTargets]);
+  }, [client, connectionState, hdcAvailable, listTargets]);
 
   useEffect(() => {
-    if (!client || connectionState !== "open" || !isSupported) {
+    if (!client || connectionState !== "open" || !isSupported || hdcAvailable === false) {
       return;
     }
 
@@ -142,7 +151,7 @@ export function useHdcDeviceSelection({
     return () => {
       window.clearInterval(intervalId);
     };
-  }, [client, connectionState, isSupported, pollMs, listTargets]);
+  }, [client, connectionState, isSupported, hdcAvailable, pollMs, listTargets]);
 
   const selectDevice = useCallback(
     (connectKey: string) => {

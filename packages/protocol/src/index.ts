@@ -18,15 +18,35 @@ export interface HostCapabilities {
   "hdc.listTargets": boolean;
   "hdc.getParameters": boolean;
   "hdc.shell": boolean;
+  "hdc.getBinConfig": boolean;
+  "hdc.setBinPath": boolean;
 }
 
-export type InvokeAction = "host.getCapabilities" | "hdc.listTargets" | "hdc.getParameters" | "hdc.shell";
+export type BinConfigSource = "custom" | "path" | "deveco" | "none";
+
+export interface HdcBinConfigResult {
+  customBinPath: string | null;
+  resolvedBinPath: string | null;
+  source: BinConfigSource;
+  available: boolean;
+  message?: string;
+}
+
+export type InvokeAction =
+  | "host.getCapabilities"
+  | "hdc.listTargets"
+  | "hdc.getParameters"
+  | "hdc.shell"
+  | "hdc.getBinConfig"
+  | "hdc.setBinPath";
 
 export interface InvokeArgsByAction {
   "host.getCapabilities": Record<string, never>;
   "hdc.listTargets": Record<string, never>;
   "hdc.getParameters": { connectKey: string };
   "hdc.shell": { connectKey: string; command: string };
+  "hdc.getBinConfig": Record<string, never>;
+  "hdc.setBinPath": { binPath: string | null };
 }
 
 export interface InvokeResultByAction {
@@ -34,6 +54,8 @@ export interface InvokeResultByAction {
   "hdc.listTargets": { targets: string[] };
   "hdc.getParameters": { parameters: Record<string, string> };
   "hdc.shell": { output: string };
+  "hdc.getBinConfig": HdcBinConfigResult;
+  "hdc.setBinPath": HdcBinConfigResult;
 }
 
 type InvokePayload = {

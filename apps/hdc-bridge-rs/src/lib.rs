@@ -1,10 +1,13 @@
 use futures_util::{SinkExt, StreamExt};
-use hdckit_rs::Client as HdcClient;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
+
+mod hdc_bin;
+
+use hdc_bin::{build_hdc_client_from_config, get_bin_config, set_custom_bin_path};
 
 pub const DEFAULT_WS_ADDR: &str = "127.0.0.1:8787";
 
@@ -63,6 +66,38 @@ fn hdc_error(id: String, message: String) -> Envelope {
     )
 }
 
+fn hdc_bin_error(id: String, message: String) -> Envelope {
+    host_message(
+        id,
+        "error",
+        json!({
+          "code": "HDC_BIN_UNAVAILABLE",
+          "message": message
+        }),
+    )
+}
+
+fn optional_string_arg(args: &Value, key: &str) -> Result<Option<String>, String> {
+    let value = args
+        .get(key)
+        .ok_or_else(|| format!("`{key}` is required"))?;
+
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    let Some(raw) = value.as_str() else {
+        return Err(format!("`{key}` must be a string or null"));
+    };
+
+    let normalized = raw.trim();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(normalized.to_string()))
+}
+
 async fn handle_invoke(id: String, payload: Value) -> Envelope {
     let invoke = match serde_json::from_value::<InvokePayload>(payload) {
         Ok(value) => value,
@@ -78,8 +113,6 @@ async fn handle_invoke(id: String, payload: Value) -> Envelope {
         }
     };
 
-    let client = HdcClient::from_env();
-
     match invoke.action.as_str() {
         "host.getCapabilities" => host_message(
             id,
@@ -91,25 +124,74 @@ async fn handle_invoke(id: String, payload: Value) -> Envelope {
                   "host.getCapabilities": true,
                   "hdc.listTargets": true,
                   "hdc.getParameters": true,
-                  "hdc.shell": true
+                  "hdc.shell": true,
+                  "hdc.getBinConfig": true,
+                  "hdc.setBinPath": true
                 }
               }
             }),
         ),
-        "hdc.listTargets" => match client.list_targets().await {
-            Ok(targets) => host_message(
-                id,
-                "event",
-                json!({
-                  "name": "hdc.listTargets.result",
-                  "data": {
-                    "targets": targets
-                  }
-                }),
-            ),
-            Err(error) => hdc_error(id, error.to_string()),
-        },
+        "hdc.getBinConfig" => host_message(
+            id,
+            "event",
+            json!({
+              "name": "hdc.getBinConfig.result",
+              "data": get_bin_config()
+            }),
+        ),
+        "hdc.setBinPath" => {
+            let bin_path = match optional_string_arg(&invoke.args, "binPath") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                          "code": "INVALID_ARGS",
+                          "message": message
+                        }),
+                    )
+                }
+            };
+
+            match set_custom_bin_path(bin_path) {
+                Ok(config) => host_message(
+                    id,
+                    "event",
+                    json!({
+                      "name": "hdc.setBinPath.result",
+                      "data": config
+                    }),
+                ),
+                Err(error) => hdc_error(id, error),
+            }
+        }
+        "hdc.listTargets" => {
+            let client = match build_hdc_client_from_config() {
+                Ok(value) => value,
+                Err(message) => return hdc_bin_error(id, message),
+            };
+
+            match client.list_targets().await {
+                Ok(targets) => host_message(
+                    id,
+                    "event",
+                    json!({
+                      "name": "hdc.listTargets.result",
+                      "data": {
+                        "targets": targets
+                      }
+                    }),
+                ),
+                Err(error) => hdc_error(id, error.to_string()),
+            }
+        }
         "hdc.getParameters" => {
+            let client = match build_hdc_client_from_config() {
+                Ok(value) => value,
+                Err(message) => return hdc_bin_error(id, message),
+            };
+
             let connect_key = match required_string_arg(&invoke.args, "connectKey") {
                 Ok(value) => value,
                 Err(message) => {
@@ -142,6 +224,11 @@ async fn handle_invoke(id: String, payload: Value) -> Envelope {
             }
         }
         "hdc.shell" => {
+            let client = match build_hdc_client_from_config() {
+                Ok(value) => value,
+                Err(message) => return hdc_bin_error(id, message),
+            };
+
             let connect_key = match required_string_arg(&invoke.args, "connectKey") {
                 Ok(value) => value,
                 Err(message) => {
