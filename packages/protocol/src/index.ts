@@ -14,11 +14,9 @@ export interface Envelope<TType extends string, TPayload> {
 }
 
 export type ClientMessage =
-  | Envelope<"ping", { source: HarmonyHost; note?: string }>
   | Envelope<"invoke", { action: string; args?: Record<string, unknown> }>;
 
 export type HostMessage =
-  | Envelope<"pong", { host: HarmonyHost; note?: string }>
   | Envelope<"event", { name: string; data?: Record<string, unknown> }>
   | Envelope<"error", { code: string; message: string }>;
 

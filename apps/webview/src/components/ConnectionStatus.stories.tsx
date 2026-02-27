@@ -8,7 +8,7 @@ const meta: Meta<typeof ConnectionStatus> = {
     host: "tauri",
     wsUrl: "ws://127.0.0.1:8787",
     state: "open",
-    lastMessageType: "pong"
+    lastMessageType: "event"
   }
 };
 

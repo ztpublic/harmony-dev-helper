@@ -4,6 +4,20 @@ import { WebSocketServer, type RawData, type WebSocket } from "ws";
 const BRIDGE_PORT = 8788;
 let bridgeServer: WebSocketServer | undefined;
 
+function resolveInvokeAction(payload: unknown): string | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined;
+  }
+
+  const action = (payload as { action?: unknown }).action;
+  if (typeof action !== "string") {
+    return undefined;
+  }
+
+  const trimmed = action.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
 function startBridgeServer(output: vscode.OutputChannel): void {
   if (bridgeServer) {
     return;
@@ -17,32 +31,42 @@ function startBridgeServer(output: vscode.OutputChannel): void {
 
       try {
         const incoming = JSON.parse(payloadText) as {
-          id?: string;
-          type?: string;
+          id?: unknown;
+          type?: unknown;
+          payload?: unknown;
         };
+        const id = typeof incoming.id === "string" && incoming.id.trim() ? incoming.id : "vscode-error";
+        const type = typeof incoming.type === "string" ? incoming.type : "unknown";
 
-        const outgoing =
-          incoming.type === "ping"
-            ? {
-                id: incoming.id ?? "vscode-pong",
-                type: "pong",
-                payload: { host: "vscode", note: "pong from vscode bridge" },
-                ts: Date.now()
-              }
-            : {
-                id: incoming.id ?? "vscode-event",
-                type: "event",
-                payload: {
-                  name: "invoke.received",
-                  data: {
-                    host: "vscode",
-                    receivedType: incoming.type ?? "unknown"
-                  }
-                },
-                ts: Date.now()
-              };
+        if (type !== "invoke") {
+          socket.send(
+            JSON.stringify({
+              id,
+              type: "error",
+              payload: {
+                code: "UNSUPPORTED_MESSAGE_TYPE",
+                message: `Unsupported message type: ${type}`
+              },
+              ts: Date.now()
+            })
+          );
+          return;
+        }
 
-        socket.send(JSON.stringify(outgoing));
+        const action = resolveInvokeAction(incoming.payload);
+        socket.send(
+          JSON.stringify({
+            id,
+            type: "error",
+            payload: {
+              code: "NOT_IMPLEMENTED",
+              message: action
+                ? `Invoke action not implemented in VSCode host: ${action}`
+                : "No invoke actions are implemented in the VSCode host yet."
+            },
+            ts: Date.now()
+          })
+        );
       } catch {
         socket.send(
           JSON.stringify({

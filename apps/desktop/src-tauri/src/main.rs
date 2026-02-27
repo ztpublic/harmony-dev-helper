@@ -209,24 +209,13 @@ async fn handle_client(stream: TcpStream) {
       let parsed = serde_json::from_str::<Envelope>(&text);
 
       let response = match parsed {
-        Ok(incoming) if incoming.kind == "ping" => host_message(
-          incoming.id,
-          "pong",
-          json!({
-            "host": "tauri",
-            "note": "pong from rust websocket bridge"
-          }),
-        ),
         Ok(incoming) if incoming.kind == "invoke" => handle_invoke(incoming.id, incoming.payload).await,
         Ok(incoming) => host_message(
           incoming.id,
-          "event",
+          "error",
           json!({
-            "name": "invoke.received",
-            "data": {
-              "receivedType": incoming.kind,
-              "host": "tauri"
-            }
+            "code": "UNSUPPORTED_MESSAGE_TYPE",
+            "message": format!("Unsupported message type: {}", incoming.kind)
           }),
         ),
         Err(_) => host_message(
