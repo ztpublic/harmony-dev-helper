@@ -1,0 +1,14 @@
+{
+  "name": "@harmony/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "tauri dev --config src-tauri/tauri.conf.json",
+    "build": "tauri build --config src-tauri/tauri.conf.json",
+    "typecheck": "echo \"Rust checks are handled with cargo\"",
+    "lint": "cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --all-features"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.2.0"
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Harmony Dev Helper",
+  "version": "0.1.0",
+  "identifier": "dev.harmony.helper",
+  "build": {
+    "beforeDevCommand": "pnpm --filter @harmony/webview dev",
+    "devUrl": "http://127.0.0.1:1420",
+    "beforeBuildCommand": "pnpm --filter @harmony/webview build",
+    "frontendDist": "../../webview/dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "label": "main",
+        "title": "Harmony Dev Helper",
+        "width": 1280,
+        "height": 820,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": false
+  }
+}

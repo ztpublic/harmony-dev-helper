@@ -1,0 +1,19 @@
+<idea-plugin>
+  <id>dev.harmony.intellij</id>
+  <name>Harmony Dev Helper</name>
+  <vendor email="dev@harmony.local">Harmony</vendor>
+
+  <description>
+    Shared Harmony webview host for IntelliJ.
+  </description>
+
+  <depends>com.intellij.modules.platform</depends>
+
+  <extensions defaultExtensionNs="com.intellij">
+    <toolWindow
+      id="Harmony"
+      anchor="right"
+      factoryClass="dev.harmony.plugin.HarmonyToolWindowFactory"
+      canCloseContents="false" />
+  </extensions>
+</idea-plugin>

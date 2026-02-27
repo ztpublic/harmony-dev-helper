@@ -1,0 +1,27 @@
+node_modules
+.pnpm-store
+.turbo
+.DS_Store
+*.log
+
+# JS/TS
+coverage
+dist
+out
+storybook-static
+
+# Rust / Tauri
+target
+apps/desktop/src-tauri/target
+apps/desktop/src-tauri/gen
+
+# VSCode extension
+apps/vscode-extension/.vscode-test
+apps/vscode-extension/media/webview/*
+!apps/vscode-extension/media/webview/.gitkeep
+
+# IntelliJ
+apps/intellij-plugin/.gradle
+apps/intellij-plugin/build
+apps/intellij-plugin/src/main/resources/webview/*
+!apps/intellij-plugin/src/main/resources/webview/.gitkeep

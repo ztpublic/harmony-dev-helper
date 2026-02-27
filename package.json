@@ -1,0 +1,23 @@
+{
+  "name": "harmony-dev-helper",
+  "private": true,
+  "version": "0.1.0",
+  "packageManager": "pnpm@10.6.2",
+  "scripts": {
+    "dev": "turbo run dev --parallel",
+    "build": "turbo run build",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "storybook": "pnpm --filter @harmony/webview storybook",
+    "build:webview": "pnpm --filter @harmony/webview build",
+    "sync:webview": "node scripts/sync-webview-assets.mjs",
+    "prepare:hosts": "pnpm run build:webview && pnpm run sync:webview",
+    "dev:webview": "pnpm --filter @harmony/webview dev",
+    "dev:desktop": "pnpm --filter @harmony/desktop dev",
+    "dev:vscode": "pnpm --filter @harmony/vscode-extension watch"
+  },
+  "devDependencies": {
+    "turbo": "^2.5.0",
+    "typescript": "^5.8.2"
+  }
+}
