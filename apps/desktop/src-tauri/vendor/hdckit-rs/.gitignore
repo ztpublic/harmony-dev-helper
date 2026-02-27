@@ -1,0 +1,9 @@
+/node_modules
+/dist
+package-lock.json
+test.hap
+rust/hdckit-rs/target
+
+doc/awesome-hdc
+target
+.DS_Store

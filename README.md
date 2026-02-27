@@ -77,3 +77,11 @@ Frontend resolves bridge config in this order:
 1. `window.__HARMONY_BRIDGE__`
 2. `location.search` (`host`, `wsUrl`)
 3. environment detection fallback (Tauri/VSCode/browser)
+
+## Tauri HDC invoke actions
+
+The desktop Rust backend vendors `hdckit-rs` under `apps/desktop/src-tauri/vendor/hdckit-rs` and exposes these websocket `invoke` actions:
+
+- `hdc.listTargets` with `args: {}`
+- `hdc.getParameters` with `args: { connectKey: string }`
+- `hdc.shell` with `args: { connectKey: string, command: string }`
