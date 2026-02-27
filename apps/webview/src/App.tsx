@@ -1,9 +1,9 @@
 import { HarmonyWebSocketClient, type ConnectionState, resolveBootstrap } from "@harmony/webview-bridge";
-import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { MainTabbedPanel } from "./components/MainTabbedPanel";
-import { HdcSettingsDialog } from "./features/hdc/HdcSettingsDialog";
 import { useHdcBinConfig } from "./features/hdc/useHdcBinConfig";
 import { useHdcDeviceSelection } from "./features/hdc/useHdcDeviceSelection";
+import { HilogConsolePanel } from "./features/hilog/HilogConsolePanel";
 import {
   DEFAULT_MAIN_PANEL_TAB_ID,
   MAIN_PANEL_TABS,
@@ -11,6 +11,12 @@ import {
   readPersistedMainTab,
   type MainPanelTabId
 } from "./features/mainPanel/mainPanelTabs";
+import { SettingsDialog } from "./features/settings/SettingsDialog";
+import {
+  persistAppSettings,
+  readAppSettings,
+  type AppSettings
+} from "./features/settings/appSettings";
 
 export default function App() {
   const bootstrap = useMemo(() => resolveBootstrap(window), []);
@@ -20,6 +26,7 @@ export default function App() {
   const [activeMainTab, setActiveMainTab] = useState<MainPanelTabId>(() =>
     readPersistedMainTab(bootstrap.host, DEFAULT_MAIN_PANEL_TAB_ID)
   );
+  const [appSettings, setAppSettings] = useState<AppSettings>(() => readAppSettings(bootstrap.host));
 
   useEffect(() => {
     const websocketClient = new HarmonyWebSocketClient(bootstrap);
@@ -57,11 +64,16 @@ export default function App() {
 
   useEffect(() => {
     setActiveMainTab(readPersistedMainTab(bootstrap.host, DEFAULT_MAIN_PANEL_TAB_ID));
+    setAppSettings(readAppSettings(bootstrap.host));
   }, [bootstrap.host]);
 
   useEffect(() => {
     persistMainTab(bootstrap.host, activeMainTab);
   }, [bootstrap.host, activeMainTab]);
+
+  useEffect(() => {
+    persistAppSettings(bootstrap.host, appSettings);
+  }, [bootstrap.host, appSettings]);
 
   const isComboboxEnabled =
     state === "open" &&
@@ -101,15 +113,23 @@ export default function App() {
   const showMissingHdcTip =
     state === "open" && hdcBinConfig.supported && !hdcBinConfig.loading && !hdcBinConfig.available;
 
+  const saveHilogHistoryLimit = useCallback((limit: number) => {
+    setAppSettings((current) => ({
+      ...current,
+      hilogHistoryLimit: limit
+    }));
+  }, []);
+
   const mainTabPanels: Record<MainPanelTabId, ReactNode> = {
-    hdc: (
-      <section className="main-tab-placeholder">
-        <p className="kicker">HDC</p>
-        <h2>Main Panel</h2>
-        <p className="main-tab-placeholder-text">
-          HDC workflows will be added here. Future features can be introduced as new tabs.
-        </p>
-      </section>
+    hilog: (
+      <HilogConsolePanel
+        client={client}
+        connectionState={state}
+        hdcAvailable={hdcBinConfig.available}
+        selectedDevice={deviceSelection.selectedDevice}
+        active={activeMainTab === "hilog"}
+        historyLimit={appSettings.hilogHistoryLimit}
+      />
     )
   };
 
@@ -149,7 +169,7 @@ export default function App() {
           <button
             type="button"
             className="settings-icon-button"
-            aria-label="Open HDC settings"
+            aria-label="Open settings"
             onClick={() => {
               setSettingsOpen(true);
             }}
@@ -168,7 +188,7 @@ export default function App() {
         panels={mainTabPanels}
       />
 
-      <HdcSettingsDialog
+      <SettingsDialog
         open={settingsOpen}
         loading={hdcBinConfig.loading}
         saving={hdcBinConfig.saving}
@@ -176,17 +196,19 @@ export default function App() {
         resolvedBinPath={hdcBinConfig.resolvedBinPath}
         source={hdcBinConfig.source}
         message={hdcBinConfig.message}
+        hilogHistoryLimit={appSettings.hilogHistoryLimit}
         onClose={() => {
           setSettingsOpen(false);
         }}
-        onSave={async (path) => {
+        onSaveHdcPath={async (path) => {
           await hdcBinConfig.saveCustomPath(path);
           await hdcBinConfig.refresh();
         }}
-        onClear={async () => {
+        onClearHdcPath={async () => {
           await hdcBinConfig.clearCustomPath();
           await hdcBinConfig.refresh();
         }}
+        onSaveHilogHistoryLimit={saveHilogHistoryLimit}
       />
     </main>
   );

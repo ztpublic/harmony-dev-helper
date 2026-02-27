@@ -20,6 +20,8 @@ export interface HostCapabilities {
   "hdc.shell": boolean;
   "hdc.getBinConfig": boolean;
   "hdc.setBinPath": boolean;
+  "hdc.hilog.subscribe": boolean;
+  "hdc.hilog.unsubscribe": boolean;
 }
 
 export type BinConfigSource = "custom" | "path" | "deveco" | "none";
@@ -32,13 +34,41 @@ export interface HdcBinConfigResult {
   message?: string;
 }
 
+export interface HdcHilogSubscribeResult {
+  subscriptionId: string;
+  connectKey: string;
+}
+
+export interface HdcHilogUnsubscribeResult {
+  stopped: boolean;
+  subscriptionId?: string;
+}
+
+export interface HdcHilogBatchEventData {
+  subscriptionId: string;
+  connectKey: string;
+  chunk: string;
+  dropped: number;
+}
+
+export type HdcHilogState = "started" | "stopped" | "error";
+
+export interface HdcHilogStateEventData {
+  subscriptionId: string;
+  connectKey: string;
+  state: HdcHilogState;
+  message?: string;
+}
+
 export type InvokeAction =
   | "host.getCapabilities"
   | "hdc.listTargets"
   | "hdc.getParameters"
   | "hdc.shell"
   | "hdc.getBinConfig"
-  | "hdc.setBinPath";
+  | "hdc.setBinPath"
+  | "hdc.hilog.subscribe"
+  | "hdc.hilog.unsubscribe";
 
 export interface InvokeArgsByAction {
   "host.getCapabilities": Record<string, never>;
@@ -47,6 +77,8 @@ export interface InvokeArgsByAction {
   "hdc.shell": { connectKey: string; command: string };
   "hdc.getBinConfig": Record<string, never>;
   "hdc.setBinPath": { binPath: string | null };
+  "hdc.hilog.subscribe": { connectKey: string };
+  "hdc.hilog.unsubscribe": { subscriptionId?: string };
 }
 
 export interface InvokeResultByAction {
@@ -56,6 +88,8 @@ export interface InvokeResultByAction {
   "hdc.shell": { output: string };
   "hdc.getBinConfig": HdcBinConfigResult;
   "hdc.setBinPath": HdcBinConfigResult;
+  "hdc.hilog.subscribe": HdcHilogSubscribeResult;
+  "hdc.hilog.unsubscribe": HdcHilogUnsubscribeResult;
 }
 
 type InvokePayload = {
@@ -74,8 +108,23 @@ type InvokeEventPayload = {
   };
 }[InvokeAction];
 
+export type HilogEventPayload =
+  | {
+      name: "hdc.hilog.batch";
+      data: HdcHilogBatchEventData;
+    }
+  | {
+      name: "hdc.hilog.state";
+      data: HdcHilogStateEventData;
+    };
+
+export type HostEventPayload =
+  | InvokeEventPayload
+  | HilogEventPayload
+  | { name: string; data?: Record<string, unknown> };
+
 export type HostMessage =
-  | Envelope<"event", InvokeEventPayload | { name: string; data?: Record<string, unknown> }>
+  | Envelope<"event", HostEventPayload>
   | Envelope<"error", { code: string; message: string }>;
 
 export function actionResultEventName<TAction extends InvokeAction>(

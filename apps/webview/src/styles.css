@@ -168,6 +168,19 @@ body {
   gap: 0.8rem;
 }
 
+.settings-section {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
+  padding: 0.75rem;
+  display: grid;
+  gap: 0.65rem;
+}
+
+.settings-section-title {
+  margin: 0;
+  font-size: 0.92rem;
+}
+
 .settings-header {
   display: flex;
   justify-content: space-between;
@@ -241,6 +254,119 @@ body {
 
 .settings-message-error {
   color: #b91c1c;
+}
+
+.settings-message-success {
+  color: #166534;
+}
+
+.settings-hint {
+  font-size: 0.8rem;
+  color: #4b5563;
+}
+
+.hilog-panel {
+  display: grid;
+  gap: 0.65rem;
+}
+
+.hilog-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.hilog-toolbar-left,
+.hilog-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  flex-wrap: wrap;
+}
+
+.hilog-status,
+.hilog-device,
+.hilog-dropped {
+  font-size: 0.78rem;
+  border: 1px solid rgba(15, 23, 42, 0.18);
+  background: #fff;
+  border-radius: 999px;
+  padding: 0.18rem 0.52rem;
+  white-space: nowrap;
+}
+
+.hilog-status-running {
+  border-color: rgba(5, 150, 105, 0.35);
+  color: #065f46;
+  background: #ecfdf5;
+}
+
+.hilog-status-error {
+  border-color: rgba(185, 28, 28, 0.3);
+  color: #991b1b;
+  background: #fef2f2;
+}
+
+.hilog-status-paused,
+.hilog-status-idle {
+  color: #374151;
+}
+
+.hilog-button {
+  border: 1px solid rgba(15, 23, 42, 0.22);
+  border-radius: 8px;
+  background: #fff;
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.hilog-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.hilog-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.8rem;
+  color: #334155;
+}
+
+.hilog-error {
+  font-size: 0.8rem;
+  color: #991b1b;
+}
+
+.hilog-terminal-frame {
+  border-radius: 10px;
+  border: 1px solid rgba(15, 23, 42, 0.2);
+  background: #0f172a;
+  padding: 0.4rem;
+  min-height: calc(100vh - 190px);
+}
+
+.hilog-terminal {
+  width: 100%;
+  height: calc(100vh - 220px);
+  min-height: 220px;
+}
+
+.hilog-terminal .xterm-viewport {
+  border-radius: 6px;
+}
+
+@media (max-width: 700px) {
+  .hilog-terminal-frame {
+    min-height: 52vh;
+  }
+
+  .hilog-terminal {
+    height: 50vh;
+  }
 }
 
 .kicker {

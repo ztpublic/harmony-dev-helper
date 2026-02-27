@@ -45,12 +45,18 @@ importers:
       '@harmony/webview-bridge':
         specifier: workspace:*
         version: link:../../packages/webview-bridge
+      '@xterm/addon-fit':
+        specifier: ^0.10.0
+        version: 0.10.0(@xterm/xterm@5.5.0)
       react:
         specifier: ^19.0.0
         version: 19.2.4
       react-dom:
         specifier: ^19.0.0
         version: 19.2.4(react@19.2.4)
+      xterm:
+        specifier: ^5.3.0
+        version: 5.3.0
     devDependencies:
       '@storybook/addon-essentials':
         specifier: ^8.6.0
@@ -785,6 +791,14 @@ packages:
     peerDependencies:
       vite: ^4.2.0 || ^5.0.0 || ^6.0.0 || ^7.0.0
 
+  '@xterm/addon-fit@0.10.0':
+    resolution: {integrity: sha512-UFYkDm4HUahf2lnEyHvio51TNGiLK66mqP2JoATy7hRZeXaGMRDr00JiSF7m63vR5WKATF605yEggJKsw0JpMQ==}
+    peerDependencies:
+      '@xterm/xterm': ^5.0.0
+
+  '@xterm/xterm@5.5.0':
+    resolution: {integrity: sha512-hqJHYaQb5OptNunnyAnkHyM8aCjZ1MEIDTQu1iIbbTD/xops91NB5yq1ZK/dC2JDbVWtF23zUtl9JE2NqwT87A==}
+
   acorn@8.16.0:
     resolution: {integrity: sha512-UVJyE9MttOsBQIDKw1skb9nAwQuR5wuGD3+82K6JgJlm/Y+KI92oNsMNGZCYdDsVtRHSak0pcV5Dno5+4jh9sw==}
     engines: {node: '>=0.4.0'}
@@ -1444,6 +1458,10 @@ packages:
       utf-8-validate:
         optional: true
 
+  xterm@5.3.0:
+    resolution: {integrity: sha512-8QqjlekLUFTrU6x7xck1MsPzPA571K5zNqWm0M0oroYEWVOptZ0+ubQSkQ3uxIEhcIHRujJy6emDWX4A7qyFzg==}
+    deprecated: This package is now deprecated. Move to @xterm/xterm instead.
+
   yallist@3.1.1:
     resolution: {integrity: sha512-a4UGQaWPH59mOXUYnAG2ewncQS4i4F43Tv3JoAM+s2VDAmS9NsK8GpDMLrCHPksFT7h3K6TOoUNn2pb7RoXx4g==}
 
@@ -2073,6 +2091,12 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@xterm/addon-fit@0.10.0(@xterm/xterm@5.5.0)':
+    dependencies:
+      '@xterm/xterm': 5.5.0
+
+  '@xterm/xterm@5.5.0': {}
+
   acorn@8.16.0: {}
 
   ansi-regex@5.0.1: {}
@@ -2695,6 +2719,8 @@ snapshots:
       strip-ansi: 7.2.0
 
   ws@8.19.0: {}
+
+  xterm@5.3.0: {}
 
   yallist@3.1.1: {}
 

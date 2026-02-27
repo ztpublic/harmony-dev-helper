@@ -1,8 +1,14 @@
+use std::collections::VecDeque;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
 use futures_util::{SinkExt, StreamExt};
+use hdckit_rs::HilogEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::time::{SystemTime, UNIX_EPOCH};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::{mpsc, oneshot};
+use tokio::time::{interval, MissedTickBehavior};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 mod hdc_bin;
@@ -10,6 +16,14 @@ mod hdc_bin;
 use hdc_bin::{build_hdc_client_from_config, get_bin_config, set_custom_bin_path};
 
 pub const DEFAULT_WS_ADDR: &str = "127.0.0.1:8787";
+
+const OUTBOUND_QUEUE_CAPACITY: usize = 128;
+const QUEUE_MAX_LINES: usize = 4_000;
+const BATCH_INTERVAL_MS: u64 = 40;
+const BATCH_MAX_LINES: usize = 200;
+const BATCH_MAX_BYTES: usize = 64 * 1024;
+
+static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Envelope {
@@ -27,12 +41,136 @@ struct InvokePayload {
     args: Value,
 }
 
+#[derive(Debug)]
+struct ActiveHilogSubscription {
+    subscription_id: String,
+    connect_key: String,
+    stop_sender: Option<oneshot::Sender<()>>,
+    task_handle: tokio::task::JoinHandle<()>,
+}
+
+impl ActiveHilogSubscription {
+    async fn stop(mut self) {
+        if let Some(stop_sender) = self.stop_sender.take() {
+            let _ = stop_sender.send(());
+        }
+
+        let _ = self.task_handle.await;
+    }
+}
+
+#[derive(Debug)]
+struct ClientSession {
+    outbound_tx: mpsc::Sender<Envelope>,
+    active_hilog: Option<ActiveHilogSubscription>,
+}
+
+impl ClientSession {
+    fn new(outbound_tx: mpsc::Sender<Envelope>) -> Self {
+        Self {
+            outbound_tx,
+            active_hilog: None,
+        }
+    }
+
+    async fn stop_active_hilog(&mut self) -> Option<String> {
+        let active = self.active_hilog.take()?;
+        let subscription_id = active.subscription_id.clone();
+
+        println!(
+            "stopping hilog subscription {} ({})",
+            active.subscription_id, active.connect_key
+        );
+
+        active.stop().await;
+        Some(subscription_id)
+    }
+
+    async fn stop_active_hilog_matching(&mut self, expected_id: Option<&str>) -> Option<String> {
+        if let Some(expected_id) = expected_id {
+            let active_id = self
+                .active_hilog
+                .as_ref()
+                .map(|active| active.subscription_id.as_str());
+
+            if active_id != Some(expected_id) {
+                return None;
+            }
+        }
+
+        self.stop_active_hilog().await
+    }
+}
+
+#[derive(Debug, Default)]
+struct HilogBatcher {
+    lines: VecDeque<String>,
+    bytes: usize,
+    dropped_since_last_emit: u64,
+}
+
+impl HilogBatcher {
+    fn push_line(&mut self, line: String) {
+        self.bytes += line.len();
+        self.lines.push_back(line);
+
+        while self.lines.len() > QUEUE_MAX_LINES {
+            if let Some(removed) = self.lines.pop_front() {
+                self.bytes = self.bytes.saturating_sub(removed.len());
+                self.dropped_since_last_emit += 1;
+            }
+        }
+    }
+
+    fn should_flush_early(&self) -> bool {
+        self.lines.len() >= BATCH_MAX_LINES || self.bytes >= BATCH_MAX_BYTES
+    }
+
+    fn has_pending(&self) -> bool {
+        !self.lines.is_empty() || self.dropped_since_last_emit > 0
+    }
+
+    fn next_batch(&mut self) -> Option<(String, u64)> {
+        if !self.has_pending() {
+            return None;
+        }
+
+        let dropped = std::mem::take(&mut self.dropped_since_last_emit);
+        let mut chunk = String::new();
+        let mut line_count = 0usize;
+        let mut chunk_bytes = 0usize;
+
+        while let Some(next) = self.lines.front() {
+            let next_len = next.len();
+            if line_count >= BATCH_MAX_LINES {
+                break;
+            }
+            if chunk_bytes > 0 && chunk_bytes + next_len > BATCH_MAX_BYTES {
+                break;
+            }
+
+            let line = self.lines.pop_front().expect("front exists");
+            self.bytes = self.bytes.saturating_sub(line.len());
+            chunk_bytes += line.len();
+            line_count += 1;
+            chunk.push_str(&line);
+        }
+
+        Some((chunk, dropped))
+    }
+}
+
 fn now_ms() -> u64 {
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default();
 
     now.as_millis() as u64
+}
+
+fn next_message_id(prefix: &str) -> String {
+    let sequence = NEXT_MESSAGE_ID.fetch_add(1, Ordering::Relaxed);
+    format!("{prefix}-{}-{sequence}", now_ms())
 }
 
 fn host_message(id: String, kind: &str, payload: Value) -> Envelope {
@@ -53,6 +191,48 @@ fn required_string_arg(args: &Value, key: &str) -> Result<String, String> {
         .map(ToString::to_string);
 
     value.ok_or_else(|| format!("`{key}` must be a non-empty string"))
+}
+
+fn required_nullable_string_arg(args: &Value, key: &str) -> Result<Option<String>, String> {
+    let value = args
+        .get(key)
+        .ok_or_else(|| format!("`{key}` is required"))?;
+
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    let Some(raw) = value.as_str() else {
+        return Err(format!("`{key}` must be a string or null"));
+    };
+
+    let normalized = raw.trim();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(normalized.to_string()))
+}
+
+fn optional_string_arg(args: &Value, key: &str) -> Result<Option<String>, String> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    let Some(raw) = value.as_str() else {
+        return Err(format!("`{key}` must be a string when provided"));
+    };
+
+    let normalized = raw.trim();
+    if normalized.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(normalized.to_string()))
 }
 
 fn hdc_error(id: String, message: String) -> Envelope {
@@ -77,28 +257,322 @@ fn hdc_bin_error(id: String, message: String) -> Envelope {
     )
 }
 
-fn optional_string_arg(args: &Value, key: &str) -> Result<Option<String>, String> {
-    let value = args
-        .get(key)
-        .ok_or_else(|| format!("`{key}` is required"))?;
+fn format_hilog_entry(entry: &HilogEntry) -> String {
+    let time = entry.date.duration_since(UNIX_EPOCH).unwrap_or_default();
+    let seconds = time.as_secs();
+    let millis = time.subsec_millis();
 
-    if value.is_null() {
-        return Ok(None);
-    }
-
-    let Some(raw) = value.as_str() else {
-        return Err(format!("`{key}` must be a string or null"));
-    };
-
-    let normalized = raw.trim();
-    if normalized.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(normalized.to_string()))
+    format!(
+        "{seconds}.{millis:03} {} {} {} {}{}/{}: {}\n",
+        entry.pid,
+        entry.tid,
+        level_to_char(entry.level),
+        kind_to_char(entry.kind),
+        entry.domain,
+        entry.tag,
+        entry.message
+    )
 }
 
-async fn handle_invoke(id: String, payload: Value) -> Envelope {
+fn level_to_char(level: i32) -> char {
+    match level {
+        2 => 'V',
+        3 => 'D',
+        4 => 'I',
+        5 => 'W',
+        6 => 'E',
+        7 => 'F',
+        _ => '?',
+    }
+}
+
+fn kind_to_char(kind: i32) -> char {
+    match kind {
+        0 => 'A',
+        1 => 'I',
+        2 => 'C',
+        3 => 'K',
+        4 => 'P',
+        _ => '?',
+    }
+}
+
+async fn emit_hilog_state(
+    outbound_tx: &mpsc::Sender<Envelope>,
+    subscription_id: &str,
+    connect_key: &str,
+    state: &str,
+    message: Option<&str>,
+) -> Result<(), ()> {
+    let payload = if let Some(message) = message {
+        json!({
+            "name": "hdc.hilog.state",
+            "data": {
+                "subscriptionId": subscription_id,
+                "connectKey": connect_key,
+                "state": state,
+                "message": message
+            }
+        })
+    } else {
+        json!({
+            "name": "hdc.hilog.state",
+            "data": {
+                "subscriptionId": subscription_id,
+                "connectKey": connect_key,
+                "state": state
+            }
+        })
+    };
+
+    outbound_tx
+        .send(host_message(next_message_id("event"), "event", payload))
+        .await
+        .map_err(|_| ())
+}
+
+async fn emit_hilog_batch(
+    outbound_tx: &mpsc::Sender<Envelope>,
+    subscription_id: &str,
+    connect_key: &str,
+    chunk: String,
+    dropped: u64,
+) -> Result<(), ()> {
+    let payload = json!({
+        "name": "hdc.hilog.batch",
+        "data": {
+            "subscriptionId": subscription_id,
+            "connectKey": connect_key,
+            "chunk": chunk,
+            "dropped": dropped
+        }
+    });
+
+    outbound_tx
+        .send(host_message(next_message_id("event"), "event", payload))
+        .await
+        .map_err(|_| ())
+}
+
+async fn flush_hilog_batches(
+    batcher: &mut HilogBatcher,
+    outbound_tx: &mpsc::Sender<Envelope>,
+    subscription_id: &str,
+    connect_key: &str,
+) -> Result<(), ()> {
+    while let Some((chunk, dropped)) = batcher.next_batch() {
+        if chunk.is_empty() && dropped == 0 {
+            break;
+        }
+
+        if dropped > 0 {
+            println!(
+                "hilog stream {} ({}) dropped {} buffered lines",
+                subscription_id, connect_key, dropped
+            );
+        }
+
+        emit_hilog_batch(outbound_tx, subscription_id, connect_key, chunk, dropped).await?;
+    }
+
+    Ok(())
+}
+
+async fn run_hilog_worker(
+    mut hilog: hdckit_rs::HilogStream,
+    subscription_id: String,
+    connect_key: String,
+    outbound_tx: mpsc::Sender<Envelope>,
+    mut stop_rx: oneshot::Receiver<()>,
+) {
+    println!(
+        "hilog stream {} started for {}",
+        subscription_id, connect_key
+    );
+
+    if emit_hilog_state(
+        &outbound_tx,
+        &subscription_id,
+        &connect_key,
+        "started",
+        None,
+    )
+    .await
+    .is_err()
+    {
+        hilog.end();
+        return;
+    }
+
+    let mut ticker = interval(Duration::from_millis(BATCH_INTERVAL_MS));
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    let mut batcher = HilogBatcher::default();
+
+    loop {
+        tokio::select! {
+            _ = &mut stop_rx => {
+                break;
+            }
+            _ = ticker.tick() => {
+                if flush_hilog_batches(&mut batcher, &outbound_tx, &subscription_id, &connect_key).await.is_err() {
+                    hilog.end();
+                    return;
+                }
+            }
+            next = hilog.next_entry() => {
+                match next {
+                    Some(Ok(entry)) => {
+                        batcher.push_line(format_hilog_entry(&entry));
+
+                        if batcher.should_flush_early()
+                            && flush_hilog_batches(&mut batcher, &outbound_tx, &subscription_id, &connect_key).await.is_err()
+                        {
+                            hilog.end();
+                            return;
+                        }
+                    }
+                    Some(Err(error)) => {
+                        let _ = flush_hilog_batches(&mut batcher, &outbound_tx, &subscription_id, &connect_key).await;
+                        let _ = emit_hilog_state(
+                            &outbound_tx,
+                            &subscription_id,
+                            &connect_key,
+                            "error",
+                            Some(&error.to_string()),
+                        )
+                        .await;
+                        hilog.end();
+                        println!(
+                            "hilog stream {} failed for {}: {}",
+                            subscription_id, connect_key, error
+                        );
+                        return;
+                    }
+                    None => {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    hilog.end();
+
+    let _ = flush_hilog_batches(&mut batcher, &outbound_tx, &subscription_id, &connect_key).await;
+    let _ = emit_hilog_state(
+        &outbound_tx,
+        &subscription_id,
+        &connect_key,
+        "stopped",
+        None,
+    )
+    .await;
+
+    println!(
+        "hilog stream {} stopped for {}",
+        subscription_id, connect_key
+    );
+}
+
+async fn handle_hilog_subscribe(id: String, args: Value, session: &mut ClientSession) -> Envelope {
+    let connect_key = match required_string_arg(&args, "connectKey") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let _ = session.stop_active_hilog().await;
+
+    let client = match build_hdc_client_from_config() {
+        Ok(value) => value,
+        Err(message) => return hdc_bin_error(id, message),
+    };
+
+    let target = match client.get_target(connect_key.clone()) {
+        Ok(target) => target,
+        Err(error) => return hdc_error(id, error.to_string()),
+    };
+
+    let hilog = match target.open_hilog(false).await {
+        Ok(stream) => stream,
+        Err(error) => return hdc_error(id, error.to_string()),
+    };
+
+    let subscription_id = next_message_id("hilog");
+    let (stop_sender, stop_receiver) = oneshot::channel();
+    let task_handle = tokio::spawn(run_hilog_worker(
+        hilog,
+        subscription_id.clone(),
+        connect_key.clone(),
+        session.outbound_tx.clone(),
+        stop_receiver,
+    ));
+
+    session.active_hilog = Some(ActiveHilogSubscription {
+        subscription_id: subscription_id.clone(),
+        connect_key: connect_key.clone(),
+        stop_sender: Some(stop_sender),
+        task_handle,
+    });
+
+    host_message(
+        id,
+        "event",
+        json!({
+            "name": "hdc.hilog.subscribe.result",
+            "data": {
+                "subscriptionId": subscription_id,
+                "connectKey": connect_key
+            }
+        }),
+    )
+}
+
+async fn handle_hilog_unsubscribe(
+    id: String,
+    args: Value,
+    session: &mut ClientSession,
+) -> Envelope {
+    let requested_subscription_id = match optional_string_arg(&args, "subscriptionId") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let stopped_subscription_id = session
+        .stop_active_hilog_matching(requested_subscription_id.as_deref())
+        .await;
+
+    host_message(
+        id,
+        "event",
+        json!({
+            "name": "hdc.hilog.unsubscribe.result",
+            "data": {
+                "stopped": stopped_subscription_id.is_some(),
+                "subscriptionId": stopped_subscription_id.or(requested_subscription_id)
+            }
+        }),
+    )
+}
+
+async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) -> Envelope {
     let invoke = match serde_json::from_value::<InvokePayload>(payload) {
         Ok(value) => value,
         Err(error) => {
@@ -126,7 +600,9 @@ async fn handle_invoke(id: String, payload: Value) -> Envelope {
                   "hdc.getParameters": true,
                   "hdc.shell": true,
                   "hdc.getBinConfig": true,
-                  "hdc.setBinPath": true
+                  "hdc.setBinPath": true,
+                  "hdc.hilog.subscribe": true,
+                  "hdc.hilog.unsubscribe": true
                 }
               }
             }),
@@ -140,7 +616,7 @@ async fn handle_invoke(id: String, payload: Value) -> Envelope {
             }),
         ),
         "hdc.setBinPath" => {
-            let bin_path = match optional_string_arg(&invoke.args, "binPath") {
+            let bin_path = match required_nullable_string_arg(&invoke.args, "binPath") {
                 Ok(value) => value,
                 Err(message) => {
                     return host_message(
@@ -280,6 +756,8 @@ async fn handle_invoke(id: String, payload: Value) -> Envelope {
                 Err(error) => hdc_error(id, error.to_string()),
             }
         }
+        "hdc.hilog.subscribe" => handle_hilog_subscribe(id, invoke.args, session).await,
+        "hdc.hilog.unsubscribe" => handle_hilog_unsubscribe(id, invoke.args, session).await,
         _ => host_message(
             id,
             "error",
@@ -301,47 +779,75 @@ async fn handle_client(stream: TcpStream) {
     };
 
     let (mut write, mut read) = ws_stream.split();
+    let (outbound_tx, mut outbound_rx) = mpsc::channel::<Envelope>(OUTBOUND_QUEUE_CAPACITY);
 
-    while let Some(next) = read.next().await {
-        let Ok(message) = next else {
-            continue;
-        };
-
-        if let Message::Text(text) = message {
-            let parsed = serde_json::from_str::<Envelope>(&text);
-
-            let response = match parsed {
-                Ok(incoming) if incoming.kind == "invoke" => {
-                    handle_invoke(incoming.id, incoming.payload).await
-                }
-                Ok(incoming) => host_message(
-                    incoming.id,
-                    "error",
-                    json!({
-                      "code": "UNSUPPORTED_MESSAGE_TYPE",
-                      "message": format!("Unsupported message type: {}", incoming.kind)
-                    }),
-                ),
-                Err(_) => host_message(
-                    "decode-error".to_string(),
-                    "error",
-                    json!({
-                      "code": "INVALID_MESSAGE",
-                      "message": "Expected Harmony protocol JSON envelope"
-                    }),
-                ),
-            };
-
-            let payload = match serde_json::to_string(&response) {
+    let writer_task = tokio::spawn(async move {
+        while let Some(message) = outbound_rx.recv().await {
+            let payload = match serde_json::to_string(&message) {
                 Ok(value) => value,
-                Err(_) => continue,
+                Err(error) => {
+                    eprintln!("failed to serialize outbound message: {error}");
+                    continue;
+                }
             };
 
             if write.send(Message::Text(payload.into())).await.is_err() {
                 break;
             }
         }
+    });
+
+    let mut session = ClientSession::new(outbound_tx.clone());
+
+    while let Some(next) = read.next().await {
+        let Ok(message) = next else {
+            break;
+        };
+
+        let response = match message {
+            Message::Text(text) => {
+                let parsed = serde_json::from_str::<Envelope>(&text);
+
+                match parsed {
+                    Ok(incoming) if incoming.kind == "invoke" => {
+                        handle_invoke(incoming.id, incoming.payload, &mut session).await
+                    }
+                    Ok(incoming) => host_message(
+                        incoming.id,
+                        "error",
+                        json!({
+                          "code": "UNSUPPORTED_MESSAGE_TYPE",
+                          "message": format!("Unsupported message type: {}", incoming.kind)
+                        }),
+                    ),
+                    Err(_) => host_message(
+                        "decode-error".to_string(),
+                        "error",
+                        json!({
+                          "code": "INVALID_MESSAGE",
+                          "message": "Expected Harmony protocol JSON envelope"
+                        }),
+                    ),
+                }
+            }
+            Message::Close(_) => {
+                break;
+            }
+            _ => {
+                continue;
+            }
+        };
+
+        if session.outbound_tx.send(response).await.is_err() {
+            break;
+        }
     }
+
+    let _ = session.stop_active_hilog().await;
+
+    drop(session);
+    drop(outbound_tx);
+    let _ = writer_task.await;
 }
 
 pub async fn run_bridge(ws_addr: &str) -> Result<(), String> {
@@ -362,5 +868,109 @@ pub async fn run_bridge(ws_addr: &str) -> Result<(), String> {
         };
 
         tokio::spawn(handle_client(stream));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        format_hilog_entry, kind_to_char, level_to_char, HilogBatcher, BATCH_MAX_BYTES,
+        BATCH_MAX_LINES, QUEUE_MAX_LINES,
+    };
+    use hdckit_rs::HilogEntry;
+    use serde_json::json;
+    use std::time::{Duration, UNIX_EPOCH};
+
+    fn build_entry(message: &str) -> HilogEntry {
+        HilogEntry {
+            date: UNIX_EPOCH + Duration::from_secs(123),
+            pid: 100,
+            tid: 101,
+            level: 4,
+            kind: 1,
+            domain: "0ABC1".to_string(),
+            tag: "TAG".to_string(),
+            message: message.to_string(),
+        }
+    }
+
+    #[test]
+    fn batcher_flushes_by_line_threshold() {
+        let mut batcher = HilogBatcher::default();
+
+        for idx in 0..BATCH_MAX_LINES {
+            batcher.push_line(format!("line-{idx}\n"));
+        }
+
+        assert!(batcher.should_flush_early());
+
+        let (chunk, dropped) = batcher.next_batch().expect("expected batch");
+        assert_eq!(dropped, 0);
+        assert!(chunk.contains("line-0"));
+        assert!(chunk.contains(&format!("line-{}", BATCH_MAX_LINES - 1)));
+    }
+
+    #[test]
+    fn batcher_tracks_drop_oldest() {
+        let mut batcher = HilogBatcher::default();
+
+        for idx in 0..(QUEUE_MAX_LINES + 7) {
+            batcher.push_line(format!("line-{idx}\n"));
+        }
+
+        let (chunk, dropped) = batcher.next_batch().expect("expected batch");
+        assert_eq!(dropped, 7);
+        assert!(!chunk.contains("line-0"));
+        assert!(chunk.contains("line-7"));
+    }
+
+    #[test]
+    fn batcher_flushes_by_byte_threshold() {
+        let mut batcher = HilogBatcher::default();
+        let line = "x".repeat((BATCH_MAX_BYTES / 2).max(1));
+
+        batcher.push_line(format!("{line}\n"));
+        batcher.push_line(format!("{line}\n"));
+
+        assert!(batcher.should_flush_early());
+        let (chunk, dropped) = batcher.next_batch().expect("expected batch");
+        assert_eq!(dropped, 0);
+        assert!(!chunk.is_empty());
+    }
+
+    #[test]
+    fn event_payload_format_is_stable() {
+        let payload = json!({
+            "name": "hdc.hilog.batch",
+            "data": {
+                "subscriptionId": "sub-1",
+                "connectKey": "device-1",
+                "chunk": "hello\n",
+                "dropped": 3
+            }
+        });
+
+        assert_eq!(payload["name"], "hdc.hilog.batch");
+        assert_eq!(payload["data"]["subscriptionId"], "sub-1");
+        assert_eq!(payload["data"]["connectKey"], "device-1");
+        assert_eq!(payload["data"]["chunk"], "hello\n");
+        assert_eq!(payload["data"]["dropped"], 3);
+    }
+
+    #[test]
+    fn format_hilog_entry_matches_wire_text() {
+        let entry = build_entry("hello");
+        let line = format_hilog_entry(&entry);
+
+        assert!(line.contains("123.000"));
+        assert!(line.contains("100 101 I I0ABC1/TAG: hello"));
+    }
+
+    #[test]
+    fn level_and_kind_mapping_fallbacks() {
+        assert_eq!(level_to_char(4), 'I');
+        assert_eq!(level_to_char(-1), '?');
+        assert_eq!(kind_to_char(1), 'I');
+        assert_eq!(kind_to_char(99), '?');
     }
 }

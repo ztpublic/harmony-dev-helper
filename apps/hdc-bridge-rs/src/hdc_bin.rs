@@ -159,8 +159,9 @@ fn write_persisted_config(config: &PersistedBinConfig) -> Result<(), String> {
     let path = config_file_path()?;
 
     if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|error| format!("failed to create config dir {}: {error}", parent.display()))?;
+        fs::create_dir_all(parent).map_err(|error| {
+            format!("failed to create config dir {}: {error}", parent.display())
+        })?;
     }
 
     let serialized = serde_json::to_string_pretty(config)
@@ -199,8 +200,7 @@ fn expand_user_home(path: &str) -> PathBuf {
 }
 
 fn validate_hdc_candidate(path: &Path) -> Result<(), String> {
-    let metadata = fs::metadata(path)
-        .map_err(|error| format!("{} ({error})", path.display()))?;
+    let metadata = fs::metadata(path).map_err(|error| format!("{} ({error})", path.display()))?;
 
     if !metadata.is_file() {
         return Err(format!("{} is not a file", path.display()));
