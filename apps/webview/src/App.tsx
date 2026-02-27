@@ -1,14 +1,25 @@
 import { HarmonyWebSocketClient, type ConnectionState, resolveBootstrap } from "@harmony/webview-bridge";
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useEffect, useMemo, useState } from "react";
+import { MainTabbedPanel } from "./components/MainTabbedPanel";
 import { HdcSettingsDialog } from "./features/hdc/HdcSettingsDialog";
 import { useHdcBinConfig } from "./features/hdc/useHdcBinConfig";
 import { useHdcDeviceSelection } from "./features/hdc/useHdcDeviceSelection";
+import {
+  DEFAULT_MAIN_PANEL_TAB_ID,
+  MAIN_PANEL_TABS,
+  persistMainTab,
+  readPersistedMainTab,
+  type MainPanelTabId
+} from "./features/mainPanel/mainPanelTabs";
 
 export default function App() {
   const bootstrap = useMemo(() => resolveBootstrap(window), []);
   const [state, setState] = useState<ConnectionState>("idle");
   const [client, setClient] = useState<HarmonyWebSocketClient>();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [activeMainTab, setActiveMainTab] = useState<MainPanelTabId>(() =>
+    readPersistedMainTab(bootstrap.host, DEFAULT_MAIN_PANEL_TAB_ID)
+  );
 
   useEffect(() => {
     const websocketClient = new HarmonyWebSocketClient(bootstrap);
@@ -43,6 +54,14 @@ export default function App() {
 
     void deviceSelection.refresh();
   }, [state, hdcBinConfig.available, deviceSelection.refresh]);
+
+  useEffect(() => {
+    setActiveMainTab(readPersistedMainTab(bootstrap.host, DEFAULT_MAIN_PANEL_TAB_ID));
+  }, [bootstrap.host]);
+
+  useEffect(() => {
+    persistMainTab(bootstrap.host, activeMainTab);
+  }, [bootstrap.host, activeMainTab]);
 
   const isComboboxEnabled =
     state === "open" &&
@@ -81,6 +100,18 @@ export default function App() {
 
   const showMissingHdcTip =
     state === "open" && hdcBinConfig.supported && !hdcBinConfig.loading && !hdcBinConfig.available;
+
+  const mainTabPanels: Record<MainPanelTabId, ReactNode> = {
+    hdc: (
+      <section className="main-tab-placeholder">
+        <p className="kicker">HDC</p>
+        <h2>Main Panel</h2>
+        <p className="main-tab-placeholder-text">
+          HDC workflows will be added here. Future features can be introduced as new tabs.
+        </p>
+      </section>
+    )
+  };
 
   return (
     <main className="app-shell app-shell-compact">
@@ -129,6 +160,13 @@ export default function App() {
           </button>
         </div>
       </div>
+
+      <MainTabbedPanel
+        tabs={MAIN_PANEL_TABS}
+        activeTabId={activeMainTab}
+        onTabChange={setActiveMainTab}
+        panels={mainTabPanels}
+      />
 
       <HdcSettingsDialog
         open={settingsOpen}
