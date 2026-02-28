@@ -319,6 +319,7 @@ export function HilogConsolePanel({
   const queueRef = useRef<QueuedChunk[]>([]);
   const rafIdRef = useRef<number | null>(null);
   const writingRef = useRef(false);
+  const writeScrollCountRef = useRef(0);
   const viewVersionRef = useRef(0);
   const remainderRef = useRef("");
   const lineHistoryRef = useRef<LineHistoryBuffer>(createLineHistoryBuffer(historyLimit));
@@ -480,16 +481,24 @@ export function HilogConsolePanel({
       }
 
       const preWriteViewportY = terminal.buffer.active.viewportY;
+      const preWriteBaseY = terminal.buffer.active.baseY;
+      writeScrollCountRef.current = 0;
       writingRef.current = true;
       terminal.write(chunk, () => {
         writingRef.current = false;
+        const scrollCountDuringWrite = writeScrollCountRef.current;
+        writeScrollCountRef.current = 0;
 
         if (chunkVersion !== viewVersionRef.current) {
           terminal.clear();
         } else if (stickToEndRef.current) {
           terminal.scrollToBottom();
         } else {
-          terminal.scrollToLine(Math.min(preWriteViewportY, terminal.buffer.active.baseY));
+          const postWriteBaseY = terminal.buffer.active.baseY;
+          const baseGrowth = Math.max(0, postWriteBaseY - preWriteBaseY);
+          const trimmedLineCount = Math.max(0, scrollCountDuringWrite - baseGrowth);
+          const frozenViewportY = Math.max(0, preWriteViewportY - trimmedLineCount);
+          terminal.scrollToLine(Math.min(frozenViewportY, postWriteBaseY));
         }
 
         if (queueRef.current.length > 0) {
@@ -529,6 +538,10 @@ export function HilogConsolePanel({
     fit();
 
     const scrollDisposable = terminal.onScroll(() => {
+      if (writingRef.current) {
+        writeScrollCountRef.current += 1;
+      }
+
       if (!stickToEndRef.current) {
         return;
       }
