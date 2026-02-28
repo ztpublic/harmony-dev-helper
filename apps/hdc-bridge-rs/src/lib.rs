@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -39,6 +39,13 @@ struct InvokePayload {
     action: String,
     #[serde(default)]
     args: Value,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct HilogPidOption {
+    pid: i64,
+    command: String,
 }
 
 #[derive(Debug)]
@@ -233,6 +240,79 @@ fn optional_string_arg(args: &Value, key: &str) -> Result<Option<String>, String
     }
 
     Ok(Some(normalized.to_string()))
+}
+
+fn optional_positive_i64_arg(args: &Value, key: &str) -> Result<Option<i64>, String> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    let Some(raw) = value.as_i64() else {
+        return Err(format!("`{key}` must be a positive integer when provided"));
+    };
+
+    if raw <= 0 {
+        return Err(format!("`{key}` must be a positive integer when provided"));
+    }
+
+    Ok(Some(raw))
+}
+
+fn parse_hidumper_processes(output: &str) -> Vec<HilogPidOption> {
+    let has_tid_header = output.lines().any(|line| {
+        let cols = line.split_whitespace().collect::<Vec<_>>();
+        cols.len() >= 3 && cols[0] == "UID" && cols[1] == "PID" && cols[2] == "TID"
+    });
+
+    let mut deduped = BTreeMap::<i64, String>::new();
+
+    for line in output.lines() {
+        let fields = line.split_whitespace().collect::<Vec<_>>();
+        if fields.len() < 8 {
+            continue;
+        }
+
+        let Ok(pid) = fields[1].parse::<i64>() else {
+            continue;
+        };
+
+        if pid <= 0 {
+            continue;
+        }
+
+        let command = if has_tid_header {
+            if fields.len() < 9 {
+                continue;
+            }
+
+            let Ok(tid) = fields[2].parse::<i64>() else {
+                continue;
+            };
+
+            if tid <= 0 || pid != tid {
+                continue;
+            }
+
+            fields[8..].join(" ")
+        } else {
+            fields[7..].join(" ")
+        };
+
+        if command.is_empty() {
+            continue;
+        }
+
+        deduped.entry(pid).or_insert(command);
+    }
+
+    deduped
+        .into_iter()
+        .map(|(pid, command)| HilogPidOption { pid, command })
+        .collect()
 }
 
 fn hdc_error(id: String, message: String) -> Envelope {
@@ -487,6 +567,57 @@ async fn run_hilog_worker(
     );
 }
 
+async fn handle_hilog_list_pids(id: String, args: Value) -> Envelope {
+    let connect_key = match required_string_arg(&args, "connectKey") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let client = match build_hdc_client_from_config() {
+        Ok(value) => value,
+        Err(message) => return hdc_bin_error(id, message),
+    };
+
+    let target = match client.get_target(connect_key) {
+        Ok(target) => target,
+        Err(error) => return hdc_error(id, error.to_string()),
+    };
+
+    match target.shell("ps -efT").await {
+        Ok(mut session) => {
+            let output = session.read_all_string().await;
+            let _ = session.end().await;
+
+            match output {
+                Ok(output) => {
+                    let pids = parse_hidumper_processes(&output);
+                    host_message(
+                        id,
+                        "event",
+                        json!({
+                          "name": "hdc.hilog.listPids.result",
+                          "data": {
+                            "pids": pids
+                          }
+                        }),
+                    )
+                }
+                Err(error) => hdc_error(id, error.to_string()),
+            }
+        }
+        Err(error) => hdc_error(id, error.to_string()),
+    }
+}
+
 async fn handle_hilog_subscribe(id: String, args: Value, session: &mut ClientSession) -> Envelope {
     let connect_key = match required_string_arg(&args, "connectKey") {
         Ok(value) => value,
@@ -516,6 +647,20 @@ async fn handle_hilog_subscribe(id: String, args: Value, session: &mut ClientSes
         }
     };
 
+    let pid = match optional_positive_i64_arg(&args, "pid") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
     let _ = session.stop_active_hilog().await;
 
     let client = match build_hdc_client_from_config() {
@@ -528,7 +673,10 @@ async fn handle_hilog_subscribe(id: String, args: Value, session: &mut ClientSes
         Err(error) => return hdc_error(id, error.to_string()),
     };
 
-    let hilog = match target.open_hilog_with_level(false, level.as_deref()).await {
+    let hilog = match target
+        .open_hilog_with_filters(false, level.as_deref(), pid)
+        .await
+    {
         Ok(stream) => stream,
         Err(error) => return hdc_error(id, error.to_string()),
     };
@@ -628,6 +776,7 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
                   "hdc.shell": true,
                   "hdc.getBinConfig": true,
                   "hdc.setBinPath": true,
+                  "hdc.hilog.listPids": true,
                   "hdc.hilog.subscribe": true,
                   "hdc.hilog.unsubscribe": true
                 }
@@ -783,6 +932,7 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
                 Err(error) => hdc_error(id, error.to_string()),
             }
         }
+        "hdc.hilog.listPids" => handle_hilog_list_pids(id, invoke.args).await,
         "hdc.hilog.subscribe" => handle_hilog_subscribe(id, invoke.args, session).await,
         "hdc.hilog.unsubscribe" => handle_hilog_unsubscribe(id, invoke.args, session).await,
         _ => host_message(
@@ -901,8 +1051,8 @@ pub async fn run_bridge(ws_addr: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_hilog_entry, kind_to_char, level_to_ansi, level_to_char, optional_string_arg,
-        HilogBatcher,
+        format_hilog_entry, kind_to_char, level_to_ansi, level_to_char, optional_positive_i64_arg,
+        optional_string_arg, parse_hidumper_processes, HilogBatcher, HilogPidOption,
         BATCH_MAX_BYTES, BATCH_MAX_LINES, QUEUE_MAX_LINES,
     };
     use hdckit_rs::HilogEntry;
@@ -1032,5 +1182,84 @@ mod tests {
         let args = json!({ "level": 123 });
         let error = optional_string_arg(&args, "level").expect_err("expected invalid level");
         assert_eq!(error, "`level` must be a string when provided");
+    }
+
+    #[test]
+    fn optional_pid_accepts_positive_integer() {
+        let args = json!({ "pid": 1234 });
+        let parsed = optional_positive_i64_arg(&args, "pid").expect("expected valid pid");
+        assert_eq!(parsed, Some(1234));
+    }
+
+    #[test]
+    fn optional_pid_rejects_invalid_values() {
+        let args = json!({ "pid": 0 });
+        let error = optional_positive_i64_arg(&args, "pid").expect_err("expected invalid pid");
+        assert_eq!(error, "`pid` must be a positive integer when provided");
+
+        let args = json!({ "pid": -1 });
+        let error = optional_positive_i64_arg(&args, "pid").expect_err("expected invalid pid");
+        assert_eq!(error, "`pid` must be a positive integer when provided");
+
+        let args = json!({ "pid": "123" });
+        let error = optional_positive_i64_arg(&args, "pid").expect_err("expected invalid pid");
+        assert_eq!(error, "`pid` must be a positive integer when provided");
+    }
+
+    #[test]
+    fn parse_hidumper_processes_filters_threads_and_dedupes() {
+        let output = r#"
+UID        PID   TID   PPID  C STIME TTY          TIME CMD
+root         1     1      0  0 00:00 ?        00:00:01 /init
+root       200   200      1  0 00:00 ?        00:00:02 system_server
+root       200   201      1  0 00:00 ?        00:00:00 Binder:200_1
+shell      300   300      1  0 00:00 ?        00:00:00 com.demo.app
+shell      300   300      1  0 00:00 ?        00:00:00 com.demo.app.dup
+invalid line without columns
+"#;
+
+        let parsed = parse_hidumper_processes(output);
+        assert_eq!(
+            parsed,
+            vec![
+                HilogPidOption {
+                    pid: 1,
+                    command: "/init".to_string()
+                },
+                HilogPidOption {
+                    pid: 200,
+                    command: "system_server".to_string()
+                },
+                HilogPidOption {
+                    pid: 300,
+                    command: "com.demo.app".to_string()
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_ps_ef_processes_without_tid_column() {
+        let output = r#"
+UID            PID  PPID C STIME TTY          TIME CMD
+root             1     0 0 18:01:44 ?     00:00:12 init --second-stage 1714884
+root            63     1 0 18:01:44 ?     00:00:14 crypto.elf hongmeng
+invalid row
+"#;
+
+        let parsed = parse_hidumper_processes(output);
+        assert_eq!(
+            parsed,
+            vec![
+                HilogPidOption {
+                    pid: 1,
+                    command: "init --second-stage 1714884".to_string()
+                },
+                HilogPidOption {
+                    pid: 63,
+                    command: "crypto.elf hongmeng".to_string()
+                }
+            ]
+        );
     }
 }

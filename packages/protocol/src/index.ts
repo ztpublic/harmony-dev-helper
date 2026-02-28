@@ -20,6 +20,7 @@ export interface HostCapabilities {
   "hdc.shell": boolean;
   "hdc.getBinConfig": boolean;
   "hdc.setBinPath": boolean;
+  "hdc.hilog.listPids": boolean;
   "hdc.hilog.subscribe": boolean;
   "hdc.hilog.unsubscribe": boolean;
 }
@@ -37,6 +38,15 @@ export interface HdcBinConfigResult {
 export interface HdcHilogSubscribeResult {
   subscriptionId: string;
   connectKey: string;
+}
+
+export interface HdcHilogPidOption {
+  pid: number;
+  command: string;
+}
+
+export interface HdcHilogListPidsResult {
+  pids: HdcHilogPidOption[];
 }
 
 export interface HdcHilogUnsubscribeResult {
@@ -67,6 +77,7 @@ export type InvokeAction =
   | "hdc.shell"
   | "hdc.getBinConfig"
   | "hdc.setBinPath"
+  | "hdc.hilog.listPids"
   | "hdc.hilog.subscribe"
   | "hdc.hilog.unsubscribe";
 
@@ -77,7 +88,8 @@ export interface InvokeArgsByAction {
   "hdc.shell": { connectKey: string; command: string };
   "hdc.getBinConfig": Record<string, never>;
   "hdc.setBinPath": { binPath: string | null };
-  "hdc.hilog.subscribe": { connectKey: string; level?: string };
+  "hdc.hilog.listPids": { connectKey: string };
+  "hdc.hilog.subscribe": { connectKey: string; level?: string; pid?: number };
   "hdc.hilog.unsubscribe": { subscriptionId?: string };
 }
 
@@ -88,6 +100,7 @@ export interface InvokeResultByAction {
   "hdc.shell": { output: string };
   "hdc.getBinConfig": HdcBinConfigResult;
   "hdc.setBinPath": HdcBinConfigResult;
+  "hdc.hilog.listPids": HdcHilogListPidsResult;
   "hdc.hilog.subscribe": HdcHilogSubscribeResult;
   "hdc.hilog.unsubscribe": HdcHilogUnsubscribeResult;
 }

@@ -1,4 +1,9 @@
-import type { HdcHilogBatchEventData, HdcHilogStateEventData, HostMessage } from "@harmony/protocol";
+import type {
+  HdcHilogBatchEventData,
+  HdcHilogPidOption,
+  HdcHilogStateEventData,
+  HostMessage
+} from "@harmony/protocol";
 import type { ConnectionState, HarmonyWebSocketClient } from "@harmony/webview-bridge";
 import { FitAddon } from "@xterm/addon-fit";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -331,10 +336,13 @@ export function HilogConsolePanel({
     subscriptionId: string;
     connectKey: string;
     levelFilter?: string;
+    pidFilter?: number;
   } | null>(null);
   const stickToEndRef = useRef(true);
   const manualPausedRef = useRef(false);
   const levelFilterRef = useRef<HTMLDivElement>(null);
+  const pidFilterRef = useRef<HTMLDivElement>(null);
+  const pidRefreshRequestIdRef = useRef(0);
 
   const [status, setStatus] = useState<HilogStatus>("idle");
   const [manualPaused, setManualPaused] = useState(false);
@@ -345,6 +353,11 @@ export function HilogConsolePanel({
   const [searchInput, setSearchInput] = useState("");
   const [activeSearch, setActiveSearch] = useState("");
   const [isLevelDropdownOpen, setIsLevelDropdownOpen] = useState(false);
+  const [isPidDropdownOpen, setIsPidDropdownOpen] = useState(false);
+  const [pidOptions, setPidOptions] = useState<HdcHilogPidOption[]>([]);
+  const [selectedPid, setSelectedPid] = useState<number | null>(null);
+  const [isPidLoading, setIsPidLoading] = useState(false);
+  const [pidError, setPidError] = useState<string>();
   const [errorMessage, setErrorMessage] = useState<string>();
 
   stickToEndRef.current = stickToEnd;
@@ -436,6 +449,58 @@ export function HilogConsolePanel({
       return normalizeLevelCodes([...current, code]);
     });
   }, []);
+
+  const refreshPidOptions = useCallback(async () => {
+    if (
+      !client ||
+      connectionState !== "open" ||
+      !hdcAvailable ||
+      !selectedDevice
+    ) {
+      setPidOptions([]);
+      setSelectedPid(null);
+      setPidError(undefined);
+      setIsPidLoading(false);
+      return;
+    }
+
+    const requestId = pidRefreshRequestIdRef.current + 1;
+    pidRefreshRequestIdRef.current = requestId;
+    setIsPidLoading(true);
+
+    try {
+      const result = await client.invoke("hdc.hilog.listPids", {
+        connectKey: selectedDevice
+      }, {
+        timeoutMs: 20_000
+      });
+
+      if (pidRefreshRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setPidOptions(result.pids);
+      setSelectedPid((current) => {
+        if (current === null) {
+          return null;
+        }
+
+        return result.pids.some((option) => option.pid === current) ? current : null;
+      });
+      setPidError(undefined);
+    } catch (error) {
+      if (pidRefreshRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      setSelectedPid(null);
+      setPidError(toErrorMessage(error));
+    } finally {
+      if (pidRefreshRequestIdRef.current === requestId) {
+        setIsPidLoading(false);
+      }
+    }
+  }, [client, connectionState, hdcAvailable, selectedDevice]);
 
   const scheduleFlush = useCallback(() => {
     if (rafIdRef.current !== null) {
@@ -616,22 +681,46 @@ export function HilogConsolePanel({
   }, [normalizedSearch, theme, redrawFromHistory]);
 
   useEffect(() => {
-    if (!isLevelDropdownOpen) {
+    if (!active || connectionState !== "open" || !hdcAvailable || selectedDevice === null) {
+      pidRefreshRequestIdRef.current += 1;
+      setPidOptions([]);
+      setSelectedPid(null);
+      setPidError(undefined);
+      setIsPidLoading(false);
+      setIsPidDropdownOpen(false);
+      return;
+    }
+
+    setPidOptions([]);
+    setSelectedPid(null);
+    setPidError(undefined);
+    setIsPidDropdownOpen(false);
+    void refreshPidOptions();
+  }, [active, connectionState, hdcAvailable, selectedDevice, refreshPidOptions]);
+
+  useEffect(() => {
+    if (!isLevelDropdownOpen && !isPidDropdownOpen) {
       return;
     }
 
     const onMouseDown = (event: MouseEvent) => {
       const target = event.target as Node | null;
-      if (!target || levelFilterRef.current?.contains(target)) {
+      if (
+        !target ||
+        levelFilterRef.current?.contains(target) ||
+        pidFilterRef.current?.contains(target)
+      ) {
         return;
       }
 
       setIsLevelDropdownOpen(false);
+      setIsPidDropdownOpen(false);
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setIsLevelDropdownOpen(false);
+        setIsPidDropdownOpen(false);
       }
     };
 
@@ -641,7 +730,7 @@ export function HilogConsolePanel({
       document.removeEventListener("mousedown", onMouseDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [isLevelDropdownOpen]);
+  }, [isLevelDropdownOpen, isPidDropdownOpen]);
 
   useEffect(() => {
     if (!client) {
@@ -721,6 +810,10 @@ export function HilogConsolePanel({
     () => buildLevelFilterArg(selectedLevelCodes),
     [selectedLevelCodes]
   );
+  const desiredPidFilter = useMemo(
+    () => (selectedPid === null ? undefined : selectedPid),
+    [selectedPid]
+  );
 
   useEffect(() => {
     if (!client) {
@@ -754,7 +847,8 @@ export function HilogConsolePanel({
 
       if (
         activeSubscription?.connectKey === desiredConnectKey &&
-        activeSubscription.levelFilter === desiredLevelFilter
+        activeSubscription.levelFilter === desiredLevelFilter &&
+        activeSubscription.pidFilter === desiredPidFilter
       ) {
         return;
       }
@@ -782,7 +876,8 @@ export function HilogConsolePanel({
       try {
         const result = await client.invoke("hdc.hilog.subscribe", {
           connectKey: desiredConnectKey,
-          ...(desiredLevelFilter ? { level: desiredLevelFilter } : {})
+          ...(desiredLevelFilter ? { level: desiredLevelFilter } : {}),
+          ...(desiredPidFilter !== undefined ? { pid: desiredPidFilter } : {})
         });
         if (cancelled) {
           try {
@@ -798,7 +893,8 @@ export function HilogConsolePanel({
         activeSubscriptionRef.current = {
           subscriptionId: result.subscriptionId,
           connectKey: result.connectKey,
-          ...(desiredLevelFilter ? { levelFilter: desiredLevelFilter } : {})
+          ...(desiredLevelFilter ? { levelFilter: desiredLevelFilter } : {}),
+          ...(desiredPidFilter !== undefined ? { pidFilter: desiredPidFilter } : {})
         };
         setStatus("running");
         setErrorMessage(undefined);
@@ -823,7 +919,8 @@ export function HilogConsolePanel({
     selectedDevice,
     manualPaused,
     clearHistoryAndVisible,
-    desiredLevelFilter
+    desiredLevelFilter,
+    desiredPidFilter
   ]);
 
   useEffect(() => {
@@ -878,6 +975,13 @@ export function HilogConsolePanel({
 
     return `Level: ${selectedLevelCodes.length} selected`;
   }, [selectedLevelCodes]);
+  const pidFilterLabel = useMemo(() => {
+    if (selectedPid === null) {
+      return "PID: All";
+    }
+
+    return `PID: ${selectedPid}`;
+  }, [selectedPid]);
 
   const canStreamControl = connectionState === "open" && hdcAvailable && selectedDevice !== null;
 
@@ -895,7 +999,9 @@ export function HilogConsolePanel({
               className="hilog-level-trigger"
               aria-haspopup="true"
               aria-expanded={isLevelDropdownOpen}
+              disabled={!canStreamControl}
               onClick={() => {
+                setIsPidDropdownOpen(false);
                 setIsLevelDropdownOpen((current) => !current);
               }}
             >
@@ -926,6 +1032,62 @@ export function HilogConsolePanel({
               </div>
             ) : null}
           </div>
+
+          <div className="hilog-pid-filter" ref={pidFilterRef}>
+            <button
+              type="button"
+              className="hilog-pid-trigger"
+              aria-haspopup="true"
+              aria-expanded={isPidDropdownOpen}
+              disabled={!canStreamControl || isPidLoading}
+              onClick={() => {
+                setIsLevelDropdownOpen(false);
+                setIsPidDropdownOpen((current) => !current);
+              }}
+            >
+              {pidFilterLabel}
+              <span className="hilog-pid-trigger-caret">v</span>
+            </button>
+
+            {isPidDropdownOpen ? (
+              <div className="hilog-pid-menu" role="menu" aria-label="Hilog PID filters">
+                <button
+                  type="button"
+                  className={`hilog-pid-option${selectedPid === null ? " hilog-pid-option-selected" : ""}`}
+                  onClick={() => {
+                    setSelectedPid(null);
+                    setIsPidDropdownOpen(false);
+                  }}
+                >
+                  All
+                </button>
+                {pidOptions.map((option) => (
+                  <button
+                    key={option.pid}
+                    type="button"
+                    className={`hilog-pid-option${selectedPid === option.pid ? " hilog-pid-option-selected" : ""}`}
+                    onClick={() => {
+                      setSelectedPid(option.pid);
+                      setIsPidDropdownOpen(false);
+                    }}
+                  >
+                    {option.pid} — {option.command}
+                  </button>
+                ))}
+              </div>
+            ) : null}
+          </div>
+
+          <button
+            type="button"
+            className="hilog-button"
+            disabled={!canStreamControl || isPidLoading}
+            onClick={() => {
+              void refreshPidOptions();
+            }}
+          >
+            {isPidLoading ? "Refreshing PIDs..." : "Refresh PIDs"}
+          </button>
 
           <div className="hilog-search">
             <input
@@ -996,6 +1158,7 @@ export function HilogConsolePanel({
         </div>
       </div>
 
+      {pidError ? <p className="hilog-pid-error">{pidError}</p> : null}
       {errorMessage ? <p className="hilog-error">{errorMessage}</p> : null}
 
       <div className="hilog-terminal-frame">

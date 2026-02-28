@@ -552,6 +552,77 @@ body {
   color: var(--text-muted);
 }
 
+.hilog-pid-filter {
+  position: relative;
+}
+
+.hilog-pid-trigger {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  min-width: 126px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.hilog-pid-trigger:hover {
+  background: var(--surface-control-hover);
+}
+
+.hilog-pid-trigger:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.hilog-pid-trigger-caret {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.hilog-pid-menu {
+  position: absolute;
+  top: calc(100% + 0.36rem);
+  left: 0;
+  min-width: 240px;
+  max-width: 380px;
+  max-height: 280px;
+  overflow: auto;
+  padding: 0.35rem;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--surface-panel);
+  box-shadow: var(--shadow-panel);
+  z-index: 10;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.hilog-pid-option {
+  border: 0;
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: 6px;
+  padding: 0.25rem 0.4rem;
+  font-size: 0.78rem;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.hilog-pid-option:hover {
+  background: var(--surface-control-hover);
+}
+
+.hilog-pid-option-selected {
+  background: color-mix(in srgb, var(--accent-primary) 14%, var(--surface-control));
+}
+
 .hilog-search {
   display: inline-flex;
   align-items: center;
@@ -598,6 +669,11 @@ body {
   color: var(--error-text);
 }
 
+.hilog-pid-error {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
 .hilog-terminal-frame {
   border-radius: 10px;
   border: 1px solid var(--border-default);
@@ -617,6 +693,16 @@ body {
 }
 
 @media (max-width: 700px) {
+  .hilog-level-trigger,
+  .hilog-pid-trigger {
+    min-width: 110px;
+  }
+
+  .hilog-pid-menu {
+    min-width: 200px;
+    max-width: min(88vw, 320px);
+  }
+
   .hilog-search-input {
     min-width: 140px;
     width: min(52vw, 240px);

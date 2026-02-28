@@ -192,7 +192,7 @@ impl Target {
     }
 
     pub async fn open_hilog(&self, clear: bool) -> Result<HilogStream, HdcError> {
-        self.open_hilog_with_level(clear, None).await
+        self.open_hilog_with_filters(clear, None, None).await
     }
 
     pub async fn open_hilog_with_level(
@@ -200,13 +200,22 @@ impl Target {
         clear: bool,
         level: Option<&str>,
     ) -> Result<HilogStream, HdcError> {
+        self.open_hilog_with_filters(clear, level, None).await
+    }
+
+    pub async fn open_hilog_with_filters(
+        &self,
+        clear: bool,
+        level: Option<&str>,
+        pid: Option<i64>,
+    ) -> Result<HilogStream, HdcError> {
         if clear {
             let mut clear_session = self.shell("hilog -r").await?;
             let _ = clear_session.read_all().await?;
         }
 
         let mut transport = self.transport().await?;
-        let command = format!("shell {}", build_hilog_command(level));
+        let command = format!("shell {}", build_hilog_command(level, pid));
         transport.send(command.as_bytes()).await?;
         Ok(HilogStream::new(transport))
     }
@@ -253,12 +262,17 @@ impl Target {
     }
 }
 
-fn build_hilog_command(level: Option<&str>) -> String {
+fn build_hilog_command(level: Option<&str>, pid: Option<i64>) -> String {
     let mut command = String::from("hilog -v wrap -v epoch");
 
     if let Some(level) = level.map(str::trim).filter(|value| !value.is_empty()) {
         command.push_str(" -L ");
         command.push_str(&shell_single_quote(level));
+    }
+
+    if let Some(pid) = pid.filter(|value| *value > 0) {
+        command.push_str(" -P ");
+        command.push_str(&shell_single_quote(&pid.to_string()));
     }
 
     command
@@ -274,9 +288,9 @@ mod tests {
 
     #[test]
     fn build_hilog_command_without_level_filter() {
-        assert_eq!(build_hilog_command(None), "hilog -v wrap -v epoch");
+        assert_eq!(build_hilog_command(None, None), "hilog -v wrap -v epoch");
         assert_eq!(
-            build_hilog_command(Some("   ")),
+            build_hilog_command(Some("   "), None),
             "hilog -v wrap -v epoch"
         );
     }
@@ -284,11 +298,11 @@ mod tests {
     #[test]
     fn build_hilog_command_with_level_filter() {
         assert_eq!(
-            build_hilog_command(Some("I,W,E")),
+            build_hilog_command(Some("I,W,E"), None),
             "hilog -v wrap -v epoch -L 'I,W,E'"
         );
         assert_eq!(
-            build_hilog_command(Some(" INFO,ERROR ")),
+            build_hilog_command(Some(" INFO,ERROR "), None),
             "hilog -v wrap -v epoch -L 'INFO,ERROR'"
         );
     }
@@ -296,8 +310,20 @@ mod tests {
     #[test]
     fn build_hilog_command_escapes_single_quote() {
         assert_eq!(
-            build_hilog_command(Some("I,'; echo pwn")),
+            build_hilog_command(Some("I,'; echo pwn"), None),
             "hilog -v wrap -v epoch -L 'I,'\"'\"'; echo pwn'"
+        );
+    }
+
+    #[test]
+    fn build_hilog_command_with_pid_filter() {
+        assert_eq!(
+            build_hilog_command(None, Some(1234)),
+            "hilog -v wrap -v epoch -P '1234'"
+        );
+        assert_eq!(
+            build_hilog_command(Some("I,W,E"), Some(1234)),
+            "hilog -v wrap -v epoch -L 'I,W,E' -P '1234'"
         );
     }
 }
