@@ -431,9 +431,7 @@ body {
   flex-wrap: wrap;
 }
 
-.hilog-status,
-.hilog-device,
-.hilog-dropped {
+.hilog-status {
   font-size: 0.78rem;
   border: 1px solid var(--border-default);
   background: var(--surface-control);
@@ -477,6 +475,71 @@ body {
 .hilog-button:disabled {
   opacity: 0.6;
   cursor: default;
+}
+
+.hilog-level-filter {
+  position: relative;
+}
+
+.hilog-level-trigger {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  padding: 0.35rem 0.65rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  min-width: 126px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.45rem;
+}
+
+.hilog-level-trigger:hover {
+  background: var(--surface-control-hover);
+}
+
+.hilog-level-trigger-caret {
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+
+.hilog-level-menu {
+  position: absolute;
+  top: calc(100% + 0.36rem);
+  left: 0;
+  min-width: 150px;
+  padding: 0.35rem;
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  background: var(--surface-panel);
+  box-shadow: var(--shadow-panel);
+  z-index: 10;
+  display: grid;
+  gap: 0.15rem;
+}
+
+.hilog-level-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.42rem;
+  border-radius: 6px;
+  padding: 0.2rem 0.35rem;
+  font-size: 0.8rem;
+  color: var(--text-primary);
+}
+
+.hilog-level-option:hover {
+  background: var(--surface-control-hover);
+}
+
+.hilog-level-option input {
+  accent-color: var(--accent-primary);
+}
+
+.hilog-level-option input:disabled + span {
+  color: var(--text-muted);
 }
 
 .hilog-toggle {

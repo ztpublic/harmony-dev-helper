@@ -502,6 +502,20 @@ async fn handle_hilog_subscribe(id: String, args: Value, session: &mut ClientSes
         }
     };
 
+    let level = match optional_string_arg(&args, "level") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
     let _ = session.stop_active_hilog().await;
 
     let client = match build_hdc_client_from_config() {
@@ -514,7 +528,7 @@ async fn handle_hilog_subscribe(id: String, args: Value, session: &mut ClientSes
         Err(error) => return hdc_error(id, error.to_string()),
     };
 
-    let hilog = match target.open_hilog(false).await {
+    let hilog = match target.open_hilog_with_level(false, level.as_deref()).await {
         Ok(stream) => stream,
         Err(error) => return hdc_error(id, error.to_string()),
     };
@@ -887,7 +901,8 @@ pub async fn run_bridge(ws_addr: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_hilog_entry, kind_to_char, level_to_ansi, level_to_char, HilogBatcher,
+        format_hilog_entry, kind_to_char, level_to_ansi, level_to_char, optional_string_arg,
+        HilogBatcher,
         BATCH_MAX_BYTES, BATCH_MAX_LINES, QUEUE_MAX_LINES,
     };
     use hdckit_rs::HilogEntry;
@@ -996,5 +1011,26 @@ mod tests {
         assert_eq!(level_to_ansi(6), "\x1b[31m");
         assert_eq!(level_to_ansi(7), "\x1b[1;31m");
         assert_eq!(level_to_ansi(999), "\x1b[39m");
+    }
+
+    #[test]
+    fn optional_level_accepts_trimmed_string() {
+        let args = json!({ "level": "  I,W,E  " });
+        let parsed = optional_string_arg(&args, "level").expect("expected valid level");
+        assert_eq!(parsed.as_deref(), Some("I,W,E"));
+    }
+
+    #[test]
+    fn optional_level_empty_string_is_none() {
+        let args = json!({ "level": "   " });
+        let parsed = optional_string_arg(&args, "level").expect("expected empty to normalize");
+        assert_eq!(parsed, None);
+    }
+
+    #[test]
+    fn optional_level_non_string_is_invalid() {
+        let args = json!({ "level": 123 });
+        let error = optional_string_arg(&args, "level").expect_err("expected invalid level");
+        assert_eq!(error, "`level` must be a string when provided");
     }
 }

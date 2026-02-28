@@ -77,7 +77,7 @@ export interface InvokeArgsByAction {
   "hdc.shell": { connectKey: string; command: string };
   "hdc.getBinConfig": Record<string, never>;
   "hdc.setBinPath": { binPath: string | null };
-  "hdc.hilog.subscribe": { connectKey: string };
+  "hdc.hilog.subscribe": { connectKey: string; level?: string };
   "hdc.hilog.unsubscribe": { subscriptionId?: string };
 }
 

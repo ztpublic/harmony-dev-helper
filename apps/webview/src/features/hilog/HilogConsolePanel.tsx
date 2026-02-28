@@ -15,8 +15,31 @@ interface HilogConsolePanelProps {
 }
 
 type HilogStatus = "idle" | "running" | "paused" | "error";
+type HilogLevelCode = "D" | "I" | "W" | "E" | "F";
 
 const MAX_WRITE_BYTES_PER_FRAME = 128 * 1024;
+const HILOG_LEVEL_OPTIONS: ReadonlyArray<{ code: HilogLevelCode; label: string }> = [
+  { code: "D", label: "Debug" },
+  { code: "I", label: "Info" },
+  { code: "W", label: "Warn" },
+  { code: "E", label: "Error" },
+  { code: "F", label: "Fatal" }
+];
+const DEFAULT_LEVEL_CODES = HILOG_LEVEL_OPTIONS.map((option) => option.code);
+
+function normalizeLevelCodes(codes: readonly HilogLevelCode[]): HilogLevelCode[] {
+  const wanted = new Set(codes);
+  return HILOG_LEVEL_OPTIONS.filter((option) => wanted.has(option.code)).map((option) => option.code);
+}
+
+function buildLevelFilterArg(codes: readonly HilogLevelCode[]): string | undefined {
+  const normalized = normalizeLevelCodes(codes);
+  if (normalized.length === 0 || normalized.length === HILOG_LEVEL_OPTIONS.length) {
+    return undefined;
+  }
+
+  return normalized.join(",");
+}
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -54,14 +77,22 @@ export function HilogConsolePanel({
   const queueRef = useRef<string[]>([]);
   const rafIdRef = useRef<number | null>(null);
   const writingRef = useRef(false);
-  const activeSubscriptionRef = useRef<{ subscriptionId: string; connectKey: string } | null>(null);
+  const activeSubscriptionRef = useRef<{
+    subscriptionId: string;
+    connectKey: string;
+    levelFilter?: string;
+  } | null>(null);
   const autoScrollRef = useRef(true);
   const manualPausedRef = useRef(false);
+  const levelFilterRef = useRef<HTMLDivElement>(null);
 
   const [status, setStatus] = useState<HilogStatus>("idle");
   const [manualPaused, setManualPaused] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
-  const [droppedCount, setDroppedCount] = useState(0);
+  const [selectedLevelCodes, setSelectedLevelCodes] = useState<HilogLevelCode[]>(() => [
+    ...DEFAULT_LEVEL_CODES
+  ]);
+  const [isLevelDropdownOpen, setIsLevelDropdownOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>();
 
   autoScrollRef.current = autoScroll;
@@ -76,6 +107,20 @@ export function HilogConsolePanel({
     }
 
     terminalRef.current?.clear();
+  }, []);
+
+  const toggleLevelCode = useCallback((code: HilogLevelCode) => {
+    setSelectedLevelCodes((current) => {
+      if (current.includes(code)) {
+        if (current.length === 1) {
+          return current;
+        }
+
+        return current.filter((value) => value !== code);
+      }
+
+      return normalizeLevelCodes([...current, code]);
+    });
   }, []);
 
   const scheduleFlush = useCallback(() => {
@@ -193,6 +238,34 @@ export function HilogConsolePanel({
   }, [historyLimit]);
 
   useEffect(() => {
+    if (!isLevelDropdownOpen) {
+      return;
+    }
+
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target || levelFilterRef.current?.contains(target)) {
+        return;
+      }
+
+      setIsLevelDropdownOpen(false);
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsLevelDropdownOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [isLevelDropdownOpen]);
+
+  useEffect(() => {
     if (!client) {
       return;
     }
@@ -208,10 +281,7 @@ export function HilogConsolePanel({
           return;
         }
 
-        const { chunk, dropped } = message.payload.data;
-        if (dropped > 0) {
-          setDroppedCount((current) => current + dropped);
-        }
+        const { chunk } = message.payload.data;
 
         if (!chunk) {
           return;
@@ -257,6 +327,10 @@ export function HilogConsolePanel({
     hdcAvailable &&
     selectedDevice !== null &&
     !manualPaused;
+  const desiredLevelFilter = useMemo(
+    () => buildLevelFilterArg(selectedLevelCodes),
+    [selectedLevelCodes]
+  );
 
   useEffect(() => {
     if (!client) {
@@ -288,7 +362,10 @@ export function HilogConsolePanel({
         return;
       }
 
-      if (activeSubscription?.connectKey === desiredConnectKey) {
+      if (
+        activeSubscription?.connectKey === desiredConnectKey &&
+        activeSubscription.levelFilter === desiredLevelFilter
+      ) {
         return;
       }
 
@@ -309,12 +386,14 @@ export function HilogConsolePanel({
       }
 
       clearQueueAndTerminal();
-      setDroppedCount(0);
       setErrorMessage(undefined);
       setStatus("idle");
 
       try {
-        const result = await client.invoke("hdc.hilog.subscribe", { connectKey: desiredConnectKey });
+        const result = await client.invoke("hdc.hilog.subscribe", {
+          connectKey: desiredConnectKey,
+          ...(desiredLevelFilter ? { level: desiredLevelFilter } : {})
+        });
         if (cancelled) {
           try {
             await client.invoke("hdc.hilog.unsubscribe", {
@@ -328,7 +407,8 @@ export function HilogConsolePanel({
 
         activeSubscriptionRef.current = {
           subscriptionId: result.subscriptionId,
-          connectKey: result.connectKey
+          connectKey: result.connectKey,
+          ...(desiredLevelFilter ? { levelFilter: desiredLevelFilter } : {})
         };
         setStatus("running");
         setErrorMessage(undefined);
@@ -347,7 +427,14 @@ export function HilogConsolePanel({
     return () => {
       cancelled = true;
     };
-  }, [client, shouldRun, selectedDevice, manualPaused, clearQueueAndTerminal]);
+  }, [
+    client,
+    shouldRun,
+    selectedDevice,
+    manualPaused,
+    clearQueueAndTerminal,
+    desiredLevelFilter
+  ]);
 
   useEffect(() => {
     return () => {
@@ -394,6 +481,14 @@ export function HilogConsolePanel({
     return "Idle";
   }, [connectionState, hdcAvailable, selectedDevice, manualPaused, status]);
 
+  const levelFilterLabel = useMemo(() => {
+    if (selectedLevelCodes.length === HILOG_LEVEL_OPTIONS.length) {
+      return "Level: All";
+    }
+
+    return `Level: ${selectedLevelCodes.length} selected`;
+  }, [selectedLevelCodes]);
+
   const canStreamControl = connectionState === "open" && hdcAvailable && selectedDevice !== null;
 
   return (
@@ -401,11 +496,47 @@ export function HilogConsolePanel({
       <div className="hilog-toolbar">
         <div className="hilog-toolbar-left">
           <span className={`hilog-status hilog-status-${status}`}>Status: {streamStatus}</span>
-          <span className="hilog-device">Device: {selectedDevice ?? "none"}</span>
-          <span className="hilog-dropped">Dropped: {droppedCount}</span>
         </div>
 
         <div className="hilog-toolbar-right">
+          <div className="hilog-level-filter" ref={levelFilterRef}>
+            <button
+              type="button"
+              className="hilog-level-trigger"
+              aria-haspopup="true"
+              aria-expanded={isLevelDropdownOpen}
+              onClick={() => {
+                setIsLevelDropdownOpen((current) => !current);
+              }}
+            >
+              {levelFilterLabel}
+              <span className="hilog-level-trigger-caret">v</span>
+            </button>
+
+            {isLevelDropdownOpen ? (
+              <div className="hilog-level-menu" role="menu" aria-label="Hilog log level filters">
+                {HILOG_LEVEL_OPTIONS.map((option) => {
+                  const checked = selectedLevelCodes.includes(option.code);
+                  const disableUncheck = checked && selectedLevelCodes.length === 1;
+
+                  return (
+                    <label key={option.code} className="hilog-level-option">
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        disabled={disableUncheck}
+                        onChange={() => {
+                          toggleLevelCode(option.code);
+                        }}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            ) : null}
+          </div>
+
           <button
             type="button"
             className="hilog-button"

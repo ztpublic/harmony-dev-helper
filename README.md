@@ -145,6 +145,10 @@ Supported invoke actions:
 - `hdc.hilog.subscribe`
 - `hdc.hilog.unsubscribe`
 
+`hdc.hilog.subscribe` args:
+- `connectKey: string` (required)
+- `level?: string` (optional, forwarded to `hilog -L`, e.g. `I,W,E` or `^D,I`)
+
 Additional async host events:
 - `hdc.hilog.batch`
 - `hdc.hilog.state`
