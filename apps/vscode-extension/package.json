@@ -7,14 +7,26 @@
     "vscode": "^1.95.0"
   },
   "main": "./out/extension.js",
-  "activationEvents": ["onCommand:harmony.openWebview"],
+  "activationEvents": ["onView:harmony.mainView"],
   "contributes": {
-    "commands": [
-      {
-        "command": "harmony.openWebview",
-        "title": "Harmony: Open Shared Webview"
-      }
-    ]
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "harmony.panel",
+          "title": "Harmony",
+          "icon": "media/harmony-panel.svg"
+        }
+      ]
+    },
+    "views": {
+      "harmony.panel": [
+        {
+          "type": "webview",
+          "id": "harmony.mainView",
+          "name": "Main"
+        }
+      ]
+    }
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

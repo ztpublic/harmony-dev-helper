@@ -12,7 +12,7 @@
   <extensions defaultExtensionNs="com.intellij">
     <toolWindow
       id="Harmony"
-      anchor="right"
+      anchor="bottom"
       factoryClass="dev.harmony.plugin.HarmonyToolWindowFactory"
       canCloseContents="false" />
   </extensions>

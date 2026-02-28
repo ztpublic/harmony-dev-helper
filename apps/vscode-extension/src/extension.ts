@@ -7,6 +7,7 @@ import * as vscode from "vscode";
 const BRIDGE_HOST = "127.0.0.1";
 const BRIDGE_PORT = 8788;
 const BRIDGE_WS_URL = `ws://${BRIDGE_HOST}:${BRIDGE_PORT}`;
+const HARMONY_VIEW_ID = "harmony.mainView";
 const READY_TIMEOUT_MS = 8_000;
 const READY_POLL_INTERVAL_MS = 150;
 
@@ -174,17 +175,17 @@ function stopBridgeProcess(output: vscode.OutputChannel): void {
   bridgeProcess = undefined;
 }
 
-function buildWebviewHtml(panel: vscode.WebviewPanel, extensionUri: vscode.Uri): string {
+function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   const distRoot = vscode.Uri.joinPath(extensionUri, "media", "webview");
-  const scriptUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "assets", "main.js"));
-  const styleUri = panel.webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "assets", "main.css"));
+  const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "assets", "main.js"));
+  const styleUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "assets", "main.css"));
   const nonce = `${Date.now()}`;
 
   return `<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${panel.webview.cspSource} data:; style-src ${panel.webview.cspSource}; script-src 'nonce-${nonce}'; connect-src ${BRIDGE_WS_URL};" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src ${webview.cspSource} data:; style-src ${webview.cspSource}; script-src 'nonce-${nonce}'; connect-src ${BRIDGE_WS_URL};" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <link rel="stylesheet" href="${styleUri}" />
     <title>Harmony</title>
@@ -201,29 +202,35 @@ function buildWebviewHtml(panel: vscode.WebviewPanel, extensionUri: vscode.Uri):
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("Harmony");
+  const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
 
-  void ensureBridgeStarted(context, output).catch((error: unknown) => {
-    const message = error instanceof Error ? error.message : String(error);
-    output.appendLine(`[hdc-bridge:error] ${message}`);
-  });
+  const webviewProvider = vscode.window.registerWebviewViewProvider(
+    HARMONY_VIEW_ID,
+    {
+      resolveWebviewView: async (webviewView) => {
+        webviewView.webview.options = {
+          enableScripts: true,
+          localResourceRoots: [mediaRoot]
+        };
 
-  const openCommand = vscode.commands.registerCommand("harmony.openWebview", async () => {
-    try {
-      await ensureBridgeStarted(context, output);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      output.appendLine(`[hdc-bridge:error] ${message}`);
+        try {
+          await ensureBridgeStarted(context, output);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          output.appendLine(`[hdc-bridge:error] ${message}`);
+        }
+
+        webviewView.webview.html = buildWebviewHtml(webviewView.webview, context.extensionUri);
+      }
+    },
+    {
+      webviewOptions: {
+        retainContextWhenHidden: true
+      }
     }
+  );
 
-    const panel = vscode.window.createWebviewPanel("harmony", "Harmony", vscode.ViewColumn.One, {
-      enableScripts: true,
-      localResourceRoots: [vscode.Uri.joinPath(context.extensionUri, "media")]
-    });
-
-    panel.webview.html = buildWebviewHtml(panel, context.extensionUri);
-  });
-
-  context.subscriptions.push(openCommand, output, {
+  context.subscriptions.push(webviewProvider, output, {
     dispose: () => {
       stopBridgeProcess(output);
     }

@@ -83,6 +83,10 @@ Before testing packaged webview assets in VSCode, sync the built shared webview:
 pnpm prepare:hosts
 ```
 
+Notes:
+- The shared UI is hosted in the bottom Panel area as the `Harmony` view container (`harmony.mainView`).
+- The VSCode sidecar bridge starts lazily when the Harmony view is first opened.
+
 ### IntelliJ plugin
 
 1. Build and sync webview assets:
@@ -92,6 +96,8 @@ pnpm prepare:hosts
 2. Open `apps/intellij-plugin` in IntelliJ and run the `runIde` Gradle task.
 
 Notes:
+- The shared UI is hosted in the bottom `Harmony` tool window.
+- The IntelliJ sidecar bridge starts when the tool window content is created.
 - By default IntelliJ serves `src/main/resources/webview` via an embedded server (`http://127.0.0.1:8790`).
 - You can override the URL with:
   `-Dharmony.webview.url=http://127.0.0.1:1420`
