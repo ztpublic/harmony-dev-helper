@@ -261,12 +261,13 @@ fn format_hilog_entry(entry: &HilogEntry) -> String {
     let time = entry.date.duration_since(UNIX_EPOCH).unwrap_or_default();
     let seconds = time.as_secs();
     let millis = time.subsec_millis();
+    let level = level_to_char(entry.level);
+    let level_ansi = level_to_ansi(entry.level);
 
     format!(
-        "{seconds}.{millis:03} {} {} {} {}{}/{}: {}\n",
+        "{seconds}.{millis:03} {} {} {level_ansi}{level}\x1b[0m {}{}/{}: {}\n",
         entry.pid,
         entry.tid,
-        level_to_char(entry.level),
         kind_to_char(entry.kind),
         entry.domain,
         entry.tag,
@@ -283,6 +284,18 @@ fn level_to_char(level: i32) -> char {
         6 => 'E',
         7 => 'F',
         _ => '?',
+    }
+}
+
+fn level_to_ansi(level: i32) -> &'static str {
+    match level {
+        2 => "\x1b[90m",
+        3 => "\x1b[36m",
+        4 => "\x1b[32m",
+        5 => "\x1b[33m",
+        6 => "\x1b[31m",
+        7 => "\x1b[1;31m",
+        _ => "\x1b[39m",
     }
 }
 
@@ -874,8 +887,8 @@ pub async fn run_bridge(ws_addr: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        format_hilog_entry, kind_to_char, level_to_char, HilogBatcher, BATCH_MAX_BYTES,
-        BATCH_MAX_LINES, QUEUE_MAX_LINES,
+        format_hilog_entry, kind_to_char, level_to_ansi, level_to_char, HilogBatcher,
+        BATCH_MAX_BYTES, BATCH_MAX_LINES, QUEUE_MAX_LINES,
     };
     use hdckit_rs::HilogEntry;
     use serde_json::json;
@@ -963,7 +976,7 @@ mod tests {
         let line = format_hilog_entry(&entry);
 
         assert!(line.contains("123.000"));
-        assert!(line.contains("100 101 I I0ABC1/TAG: hello"));
+        assert!(line.contains("100 101 \x1b[32mI\x1b[0m I0ABC1/TAG: hello"));
     }
 
     #[test]
@@ -972,5 +985,16 @@ mod tests {
         assert_eq!(level_to_char(-1), '?');
         assert_eq!(kind_to_char(1), 'I');
         assert_eq!(kind_to_char(99), '?');
+    }
+
+    #[test]
+    fn level_to_ansi_mapping_is_stable() {
+        assert_eq!(level_to_ansi(2), "\x1b[90m");
+        assert_eq!(level_to_ansi(3), "\x1b[36m");
+        assert_eq!(level_to_ansi(4), "\x1b[32m");
+        assert_eq!(level_to_ansi(5), "\x1b[33m");
+        assert_eq!(level_to_ansi(6), "\x1b[31m");
+        assert_eq!(level_to_ansi(7), "\x1b[1;31m");
+        assert_eq!(level_to_ansi(999), "\x1b[39m");
     }
 }
