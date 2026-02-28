@@ -1,4 +1,4 @@
-import { cp, mkdir, rm, access } from "node:fs/promises";
+import { cp, mkdir, rm, access, writeFile } from "node:fs/promises";
 import { constants } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -25,6 +25,7 @@ async function syncTarget(target) {
   await rm(target, { recursive: true, force: true });
   await mkdir(path.dirname(target), { recursive: true });
   await cp(source, target, { recursive: true });
+  await writeFile(path.join(target, ".gitkeep"), "", "utf8");
 }
 
 async function main() {

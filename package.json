@@ -10,11 +10,14 @@
     "lint": "turbo run lint",
     "storybook": "pnpm --filter @harmony/webview storybook",
     "build:webview": "pnpm --filter @harmony/webview build",
+    "build:bridge": "cargo build --manifest-path apps/hdc-bridge-rs/Cargo.toml",
     "sync:webview": "node scripts/sync-webview-assets.mjs",
+    "sync:vscode-bridge-bin": "node scripts/sync-vscode-bridge-bin.mjs",
     "prepare:hosts": "pnpm run build:webview && pnpm run sync:webview",
+    "prepare:vscode-host": "pnpm run prepare:hosts && pnpm run build:bridge && pnpm run sync:vscode-bridge-bin",
     "dev:webview": "pnpm --filter @harmony/webview dev",
     "dev:desktop": "pnpm --filter @harmony/desktop dev",
-    "dev:vscode": "pnpm --filter @harmony/vscode-extension watch"
+    "dev:vscode": "pnpm --filter ./apps/vscode-extension watch"
   },
   "devDependencies": {
     "turbo": "^2.5.0",

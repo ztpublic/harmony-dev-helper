@@ -1,0 +1,43 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "harmony:vscode-extension prepare-host",
+      "type": "shell",
+      "command": "pnpm run prepare:vscode-host",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "harmony:vscode-extension build",
+      "type": "shell",
+      "command": "pnpm --filter ./apps/vscode-extension build",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": "$tsc",
+      "group": "build"
+    },
+    {
+      "label": "harmony:vscode-extension watch",
+      "type": "shell",
+      "command": "pnpm --filter ./apps/vscode-extension watch",
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "dependsOn": [
+        "harmony:vscode-extension prepare-host"
+      ],
+      "dependsOrder": "sequence",
+      "isBackground": true,
+      "problemMatcher": "$tsc-watch",
+      "presentation": {
+        "reveal": "never",
+        "panel": "dedicated",
+        "clear": true
+      }
+    }
+  ]
+}

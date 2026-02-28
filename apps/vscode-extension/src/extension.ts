@@ -7,7 +7,7 @@ import * as vscode from "vscode";
 const BRIDGE_HOST = "127.0.0.1";
 const BRIDGE_PORT = 8788;
 const BRIDGE_WS_URL = `ws://${BRIDGE_HOST}:${BRIDGE_PORT}`;
-const HARMONY_VIEW_ID = "harmony.mainView";
+const HARMONY_VIEW_ID = "harmony-main-view";
 const READY_TIMEOUT_MS = 8_000;
 const READY_POLL_INTERVAL_MS = 150;
 
@@ -72,6 +72,15 @@ function findBridgeManifest(startDir: string): string | undefined {
   return undefined;
 }
 
+function findBundledBridgeBinary(extensionRoot: string): string | undefined {
+  const candidates = [
+    path.join(extensionRoot, "bin", "hdc-bridge-rs"),
+    path.join(extensionRoot, "bin", "hdc-bridge-rs.exe")
+  ];
+
+  return candidates.find((candidate) => fs.existsSync(candidate));
+}
+
 function attachProcessLogging(processRef: ChildProcess, output: vscode.OutputChannel): void {
   processRef.stdout?.on("data", (chunk: Buffer) => {
     const message = chunk.toString().trim();
@@ -101,12 +110,23 @@ function attachProcessLogging(processRef: ChildProcess, output: vscode.OutputCha
 
 function spawnBridgeProcess(context: vscode.ExtensionContext, output: vscode.OutputChannel): ChildProcess {
   const binaryOverride = process.env.HARMONY_HDC_BRIDGE_BIN?.trim();
+  const bundledBinary = findBundledBridgeBinary(context.extensionUri.fsPath);
   const wsAddr = `${BRIDGE_HOST}:${BRIDGE_PORT}`;
 
   if (binaryOverride) {
     output.appendLine(`[hdc-bridge] Launching binary override: ${binaryOverride}`);
     const child = spawn(binaryOverride, ["--ws-addr", wsAddr], {
       cwd: path.dirname(binaryOverride),
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    attachProcessLogging(child, output);
+    return child;
+  }
+
+  if (bundledBinary) {
+    output.appendLine(`[hdc-bridge] Launching bundled binary: ${bundledBinary}`);
+    const child = spawn(bundledBinary, ["--ws-addr", wsAddr], {
+      cwd: path.dirname(bundledBinary),
       stdio: ["ignore", "pipe", "pipe"]
     });
     attachProcessLogging(child, output);

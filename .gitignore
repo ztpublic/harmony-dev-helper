@@ -17,6 +17,7 @@ apps/desktop/src-tauri/gen
 
 # VSCode extension
 apps/vscode-extension/.vscode-test
+apps/vscode-extension/bin/
 apps/vscode-extension/media/webview/*
 !apps/vscode-extension/media/webview/.gitkeep
 

@@ -1,5 +1,6 @@
 {
-  "name": "@harmony/vscode-extension",
+  "name": "harmony-vscode-extension",
+  "publisher": "harmony",
   "version": "0.1.0",
   "private": true,
   "displayName": "Harmony Dev Helper",
@@ -7,22 +8,22 @@
     "vscode": "^1.95.0"
   },
   "main": "./out/extension.js",
-  "activationEvents": ["onView:harmony.mainView"],
+  "activationEvents": ["onView:harmony-main-view"],
   "contributes": {
     "viewsContainers": {
       "panel": [
         {
-          "id": "harmony.panel",
+          "id": "harmony-panel",
           "title": "Harmony",
           "icon": "media/harmony-panel.svg"
         }
       ]
     },
     "views": {
-      "harmony.panel": [
+      "harmony-panel": [
         {
           "type": "webview",
-          "id": "harmony.mainView",
+          "id": "harmony-main-view",
           "name": "Main"
         }
       ]

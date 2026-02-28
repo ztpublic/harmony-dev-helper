@@ -74,17 +74,17 @@ Starts the bridge in-process on `ws://127.0.0.1:8787`.
 Build/watch extension TypeScript:
 
 ```bash
-pnpm --filter @harmony/vscode-extension watch
+pnpm --filter ./apps/vscode-extension watch
 ```
 
-Before testing packaged webview assets in VSCode, sync the built shared webview:
+Prepare VSCode host assets (frontend + backend sidecar):
 
 ```bash
-pnpm prepare:hosts
+pnpm prepare:vscode-host
 ```
 
 Notes:
-- The shared UI is hosted in the bottom Panel area as the `Harmony` view container (`harmony.mainView`).
+- The shared UI is hosted in the bottom Panel area as the `Harmony` view container (`harmony-main-view`).
 - The VSCode sidecar bridge starts lazily when the Harmony view is first opened.
 
 ### IntelliJ plugin
@@ -110,11 +110,16 @@ Notes:
 - VSCode: sidecar bridge at `ws://127.0.0.1:8788`
 - IntelliJ: sidecar bridge at `ws://127.0.0.1:8789`
 
-### Sidecar startup order (VSCode + IntelliJ)
+### Sidecar startup order
 
+VSCode:
 1. `HARMONY_HDC_BRIDGE_BIN` (absolute path to prebuilt `hdc-bridge-rs`)
-2. Fallback:
-   `cargo run --manifest-path apps/hdc-bridge-rs/Cargo.toml -- --ws-addr <host:port>`
+2. Bundled binary (`apps/vscode-extension/bin/hdc-bridge-rs`) when present
+3. Fallback: `cargo run --manifest-path apps/hdc-bridge-rs/Cargo.toml -- --ws-addr <host:port>`
+
+IntelliJ:
+1. `HARMONY_HDC_BRIDGE_BIN` (absolute path to prebuilt `hdc-bridge-rs`)
+2. Fallback: `cargo run --manifest-path apps/hdc-bridge-rs/Cargo.toml -- --ws-addr <host:port>`
 
 Optional manifest override:
 - `HARMONY_HDC_BRIDGE_MANIFEST_PATH`
