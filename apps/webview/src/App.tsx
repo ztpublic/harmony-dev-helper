@@ -146,6 +146,7 @@ export default function App() {
         selectedDevice={deviceSelection.selectedDevice}
         active={activeMainTab === "hilog"}
         historyLimit={appSettings.hilogHistoryLimit}
+        theme={appSettings.theme}
       />
     )
   };

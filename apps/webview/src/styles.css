@@ -542,6 +542,47 @@ body {
   color: var(--text-muted);
 }
 
+.hilog-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.hilog-search-input {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--surface-control);
+  color: var(--text-primary);
+  padding: 0.35rem 0.6rem;
+  font-size: 0.8rem;
+  min-width: 180px;
+}
+
+.hilog-search-input::placeholder {
+  color: var(--text-muted);
+}
+
+.hilog-search-input:focus {
+  outline: none;
+  border-color: var(--accent-primary);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent-primary) 20%, transparent);
+}
+
+.hilog-search-clear {
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  background: var(--surface-control);
+  color: var(--text-secondary);
+  padding: 0.3rem 0.48rem;
+  font-size: 0.75rem;
+  cursor: pointer;
+  line-height: 1;
+}
+
+.hilog-search-clear:hover {
+  background: var(--surface-control-hover);
+}
+
 .hilog-toggle {
   display: inline-flex;
   align-items: center;
@@ -578,6 +619,11 @@ body {
 }
 
 @media (max-width: 700px) {
+  .hilog-search-input {
+    min-width: 140px;
+    width: min(52vw, 240px);
+  }
+
   .hilog-terminal-frame {
     min-height: 52vh;
   }

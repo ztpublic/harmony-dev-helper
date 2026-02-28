@@ -2,6 +2,7 @@ import type { HdcHilogBatchEventData, HdcHilogStateEventData, HostMessage } from
 import type { ConnectionState, HarmonyWebSocketClient } from "@harmony/webview-bridge";
 import { FitAddon } from "@xterm/addon-fit";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { AppTheme } from "../settings/appSettings";
 import { Terminal } from "xterm";
 import "xterm/css/xterm.css";
 
@@ -12,12 +13,41 @@ interface HilogConsolePanelProps {
   selectedDevice: string | null;
   active: boolean;
   historyLimit: number;
+  theme: AppTheme;
 }
 
 type HilogStatus = "idle" | "running" | "paused" | "error";
 type HilogLevelCode = "D" | "I" | "W" | "E" | "F";
+type QueuedChunk = {
+  text: string;
+  version: number;
+};
+type LineHistoryBuffer = {
+  entries: string[];
+  start: number;
+  size: number;
+  capacity: number;
+};
+type AnsiToken = {
+  kind: "ansi" | "text";
+  value: string;
+};
+type HighlightPalette = {
+  open: string;
+  close: string;
+};
 
 const MAX_WRITE_BYTES_PER_FRAME = 128 * 1024;
+const SEARCH_DEBOUNCE_MS = 250;
+const ANSI_SEQUENCE_REGEX = /\x1b\[[0-9;]*m/g;
+const DARK_HIGHLIGHT_PALETTE: HighlightPalette = {
+  open: "\x1b[48;2;102;77;0m",
+  close: "\x1b[49m"
+};
+const LIGHT_HIGHLIGHT_PALETTE: HighlightPalette = {
+  open: "\x1b[48;2;255;224;130m",
+  close: "\x1b[49m"
+};
 const HILOG_LEVEL_OPTIONS: ReadonlyArray<{ code: HilogLevelCode; label: string }> = [
   { code: "D", label: "Debug" },
   { code: "I", label: "Info" },
@@ -26,6 +56,213 @@ const HILOG_LEVEL_OPTIONS: ReadonlyArray<{ code: HilogLevelCode; label: string }
   { code: "F", label: "Fatal" }
 ];
 const DEFAULT_LEVEL_CODES = HILOG_LEVEL_OPTIONS.map((option) => option.code);
+
+function normalizeHistoryCapacity(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 0;
+  }
+
+  return Math.max(0, Math.floor(value));
+}
+
+function createLineHistoryBuffer(capacity: number): LineHistoryBuffer {
+  const normalizedCapacity = normalizeHistoryCapacity(capacity);
+  return {
+    entries: new Array(normalizedCapacity),
+    start: 0,
+    size: 0,
+    capacity: normalizedCapacity
+  };
+}
+
+function pushLineToHistory(buffer: LineHistoryBuffer, line: string): void {
+  if (buffer.capacity === 0) {
+    return;
+  }
+
+  if (buffer.size < buffer.capacity) {
+    const index = (buffer.start + buffer.size) % buffer.capacity;
+    buffer.entries[index] = line;
+    buffer.size += 1;
+    return;
+  }
+
+  buffer.entries[buffer.start] = line;
+  buffer.start = (buffer.start + 1) % buffer.capacity;
+}
+
+function pushLinesToHistory(buffer: LineHistoryBuffer, lines: readonly string[]): void {
+  for (const line of lines) {
+    pushLineToHistory(buffer, line);
+  }
+}
+
+function snapshotLineHistory(buffer: LineHistoryBuffer): string[] {
+  if (buffer.size === 0 || buffer.capacity === 0) {
+    return [];
+  }
+
+  const out = new Array<string>(buffer.size);
+  for (let idx = 0; idx < buffer.size; idx += 1) {
+    const ringIndex = (buffer.start + idx) % buffer.capacity;
+    out[idx] = buffer.entries[ringIndex] ?? "";
+  }
+
+  return out;
+}
+
+function clearLineHistory(buffer: LineHistoryBuffer): void {
+  buffer.entries = new Array(buffer.capacity);
+  buffer.start = 0;
+  buffer.size = 0;
+}
+
+function resizeLineHistory(buffer: LineHistoryBuffer, capacity: number): void {
+  const nextCapacity = normalizeHistoryCapacity(capacity);
+  if (buffer.capacity === nextCapacity) {
+    return;
+  }
+
+  const snapshot = snapshotLineHistory(buffer);
+  buffer.entries = new Array(nextCapacity);
+  buffer.start = 0;
+  buffer.size = 0;
+  buffer.capacity = nextCapacity;
+
+  if (nextCapacity === 0) {
+    return;
+  }
+
+  const startIndex = Math.max(0, snapshot.length - nextCapacity);
+  pushLinesToHistory(buffer, snapshot.slice(startIndex));
+}
+
+function normalizeSearchQuery(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function tokenizeAnsi(line: string): AnsiToken[] {
+  const tokens: AnsiToken[] = [];
+  let start = 0;
+  let match = ANSI_SEQUENCE_REGEX.exec(line);
+
+  while (match) {
+    const ansiStart = match.index;
+    const ansi = match[0];
+
+    if (ansiStart > start) {
+      tokens.push({
+        kind: "text",
+        value: line.slice(start, ansiStart)
+      });
+    }
+
+    tokens.push({
+      kind: "ansi",
+      value: ansi
+    });
+
+    start = ansiStart + ansi.length;
+    match = ANSI_SEQUENCE_REGEX.exec(line);
+  }
+
+  ANSI_SEQUENCE_REGEX.lastIndex = 0;
+
+  if (start < line.length) {
+    tokens.push({
+      kind: "text",
+      value: line.slice(start)
+    });
+  }
+
+  return tokens;
+}
+
+function matchesSearchTokenWise(line: string, normalizedQuery: string): boolean {
+  if (!normalizedQuery) {
+    return true;
+  }
+
+  const tokens = tokenizeAnsi(line);
+  return tokens.some(
+    (token) => token.kind === "text" && token.value.toLowerCase().includes(normalizedQuery)
+  );
+}
+
+function highlightTextToken(
+  text: string,
+  normalizedQuery: string,
+  palette: HighlightPalette
+): string {
+  if (!normalizedQuery) {
+    return text;
+  }
+
+  const lower = text.toLowerCase();
+  let searchFrom = 0;
+  let out = "";
+
+  while (searchFrom < text.length) {
+    const matchIndex = lower.indexOf(normalizedQuery, searchFrom);
+    if (matchIndex === -1) {
+      out += text.slice(searchFrom);
+      break;
+    }
+
+    out += text.slice(searchFrom, matchIndex);
+    const matchEnd = matchIndex + normalizedQuery.length;
+    out += `${palette.open}${text.slice(matchIndex, matchEnd)}${palette.close}`;
+    searchFrom = matchEnd;
+  }
+
+  return out;
+}
+
+function highlightLineTokenWise(
+  line: string,
+  normalizedQuery: string,
+  palette: HighlightPalette
+): string {
+  if (!normalizedQuery) {
+    return line;
+  }
+
+  const tokens = tokenizeAnsi(line);
+  return tokens
+    .map((token) => {
+      if (token.kind === "ansi") {
+        return token.value;
+      }
+
+      return highlightTextToken(token.value, normalizedQuery, palette);
+    })
+    .join("");
+}
+
+function splitChunkIntoLines(chunk: string, remainder: string): { lines: string[]; remainder: string } {
+  const combined = remainder + chunk;
+  if (!combined) {
+    return {
+      lines: [],
+      remainder: ""
+    };
+  }
+
+  const lines: string[] = [];
+  let start = 0;
+
+  for (let idx = 0; idx < combined.length; idx += 1) {
+    if (combined.charCodeAt(idx) === 10) {
+      lines.push(combined.slice(start, idx + 1));
+      start = idx + 1;
+    }
+  }
+
+  return {
+    lines,
+    remainder: combined.slice(start)
+  };
+}
 
 function normalizeLevelCodes(codes: readonly HilogLevelCode[]): HilogLevelCode[] {
   const wanted = new Set(codes);
@@ -69,14 +306,22 @@ export function HilogConsolePanel({
   hdcAvailable,
   selectedDevice,
   active,
-  historyLimit
+  historyLimit,
+  theme
 }: HilogConsolePanelProps) {
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
-  const queueRef = useRef<string[]>([]);
+  const queueRef = useRef<QueuedChunk[]>([]);
   const rafIdRef = useRef<number | null>(null);
   const writingRef = useRef(false);
+  const viewVersionRef = useRef(0);
+  const remainderRef = useRef("");
+  const lineHistoryRef = useRef<LineHistoryBuffer>(createLineHistoryBuffer(historyLimit));
+  const normalizedSearchRef = useRef("");
+  const highlightPaletteRef = useRef<HighlightPalette>(
+    theme === "light" ? LIGHT_HIGHLIGHT_PALETTE : DARK_HIGHLIGHT_PALETTE
+  );
   const activeSubscriptionRef = useRef<{
     subscriptionId: string;
     connectKey: string;
@@ -92,13 +337,71 @@ export function HilogConsolePanel({
   const [selectedLevelCodes, setSelectedLevelCodes] = useState<HilogLevelCode[]>(() => [
     ...DEFAULT_LEVEL_CODES
   ]);
+  const [searchInput, setSearchInput] = useState("");
+  const [activeSearch, setActiveSearch] = useState("");
   const [isLevelDropdownOpen, setIsLevelDropdownOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>();
 
   autoScrollRef.current = autoScroll;
   manualPausedRef.current = manualPaused;
+  const normalizedSearch = useMemo(() => normalizeSearchQuery(activeSearch), [activeSearch]);
+  const highlightPalette = useMemo<HighlightPalette>(
+    () => (theme === "light" ? LIGHT_HIGHLIGHT_PALETTE : DARK_HIGHLIGHT_PALETTE),
+    [theme]
+  );
+  normalizedSearchRef.current = normalizedSearch;
+  highlightPaletteRef.current = highlightPalette;
 
-  const clearQueueAndTerminal = useCallback(() => {
+  const renderVisibleLine = useCallback((line: string): string | null => {
+    const query = normalizedSearchRef.current;
+    if (!query) {
+      return line;
+    }
+
+    if (!matchesSearchTokenWise(line, query)) {
+      return null;
+    }
+
+    return highlightLineTokenWise(line, query, highlightPaletteRef.current);
+  }, []);
+
+  const enqueueVisibleLines = useCallback(
+    (lines: readonly string[]) => {
+      if (lines.length === 0) {
+        return;
+      }
+
+      const version = viewVersionRef.current;
+      let chunk = "";
+      let chunkBytes = 0;
+
+      for (const line of lines) {
+        if (chunkBytes > 0 && chunkBytes + line.length > MAX_WRITE_BYTES_PER_FRAME) {
+          queueRef.current.push({
+            text: chunk,
+            version
+          });
+          chunk = line;
+          chunkBytes = line.length;
+          continue;
+        }
+
+        chunk += line;
+        chunkBytes += line.length;
+      }
+
+      if (chunk) {
+        queueRef.current.push({
+          text: chunk,
+          version
+        });
+      }
+    },
+    []
+  );
+
+  const clearVisibleOnly = useCallback(() => {
+    viewVersionRef.current += 1;
     queueRef.current = [];
 
     if (rafIdRef.current !== null) {
@@ -108,6 +411,12 @@ export function HilogConsolePanel({
 
     terminalRef.current?.clear();
   }, []);
+
+  const clearHistoryAndVisible = useCallback(() => {
+    remainderRef.current = "";
+    clearLineHistory(lineHistoryRef.current);
+    clearVisibleOnly();
+  }, [clearVisibleOnly]);
 
   const toggleLevelCode = useCallback((code: HilogLevelCode) => {
     setSelectedLevelCodes((current) => {
@@ -143,16 +452,23 @@ export function HilogConsolePanel({
 
       let bytes = 0;
       let chunk = "";
+      let chunkVersion = viewVersionRef.current;
 
       while (queueRef.current.length > 0) {
         const next = queueRef.current[0];
-        if (bytes > 0 && bytes + next.length > MAX_WRITE_BYTES_PER_FRAME) {
+        if (next.version !== viewVersionRef.current) {
+          queueRef.current.shift();
+          continue;
+        }
+
+        if (bytes > 0 && bytes + next.text.length > MAX_WRITE_BYTES_PER_FRAME) {
           break;
         }
 
         queueRef.current.shift();
-        bytes += next.length;
-        chunk += next;
+        bytes += next.text.length;
+        chunk += next.text;
+        chunkVersion = next.version;
       }
 
       if (!chunk) {
@@ -163,7 +479,9 @@ export function HilogConsolePanel({
       terminal.write(chunk, () => {
         writingRef.current = false;
 
-        if (autoScrollRef.current) {
+        if (chunkVersion !== viewVersionRef.current) {
+          terminal.clear();
+        } else if (autoScrollRef.current) {
           terminal.scrollToBottom();
         }
 
@@ -224,9 +542,22 @@ export function HilogConsolePanel({
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
+      viewVersionRef.current += 1;
       queueRef.current = [];
     };
   }, []);
+
+  const redrawFromHistory = useCallback(() => {
+    clearVisibleOnly();
+
+    const lines = snapshotLineHistory(lineHistoryRef.current);
+    const visibleLines = lines
+      .map(renderVisibleLine)
+      .filter((line): line is string => line !== null);
+
+    enqueueVisibleLines(visibleLines);
+    scheduleFlush();
+  }, [clearVisibleOnly, enqueueVisibleLines, renderVisibleLine, scheduleFlush]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -235,7 +566,23 @@ export function HilogConsolePanel({
     }
 
     terminal.options.scrollback = historyLimit;
-  }, [historyLimit]);
+    resizeLineHistory(lineHistoryRef.current, historyLimit);
+    redrawFromHistory();
+  }, [historyLimit, redrawFromHistory]);
+
+  useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setActiveSearch(searchInput);
+    }, SEARCH_DEBOUNCE_MS);
+
+    return () => {
+      window.clearTimeout(timeout);
+    };
+  }, [searchInput]);
+
+  useEffect(() => {
+    redrawFromHistory();
+  }, [normalizedSearch, theme, redrawFromHistory]);
 
   useEffect(() => {
     if (!isLevelDropdownOpen) {
@@ -287,7 +634,19 @@ export function HilogConsolePanel({
           return;
         }
 
-        queueRef.current.push(chunk);
+        const parsed = splitChunkIntoLines(chunk, remainderRef.current);
+        remainderRef.current = parsed.remainder;
+        if (parsed.lines.length === 0) {
+          return;
+        }
+
+        pushLinesToHistory(lineHistoryRef.current, parsed.lines);
+
+        const visibleLines = parsed.lines
+          .map(renderVisibleLine)
+          .filter((line): line is string => line !== null);
+
+        enqueueVisibleLines(visibleLines);
         scheduleFlush();
         return;
       }
@@ -319,7 +678,7 @@ export function HilogConsolePanel({
         setErrorMessage(stateMessage ?? "Hilog stream failed");
       }
     });
-  }, [client, scheduleFlush]);
+  }, [client, enqueueVisibleLines, renderVisibleLine, scheduleFlush]);
 
   const shouldRun =
     active &&
@@ -385,7 +744,7 @@ export function HilogConsolePanel({
         return;
       }
 
-      clearQueueAndTerminal();
+      clearHistoryAndVisible();
       setErrorMessage(undefined);
       setStatus("idle");
 
@@ -432,7 +791,7 @@ export function HilogConsolePanel({
     shouldRun,
     selectedDevice,
     manualPaused,
-    clearQueueAndTerminal,
+    clearHistoryAndVisible,
     desiredLevelFilter
   ]);
 
@@ -537,6 +896,35 @@ export function HilogConsolePanel({
             ) : null}
           </div>
 
+          <div className="hilog-search">
+            <input
+              type="text"
+              className="hilog-search-input"
+              aria-label="Search hilog logs"
+              placeholder="Search logs"
+              spellCheck={false}
+              autoCorrect="off"
+              autoCapitalize="off"
+              autoComplete="off"
+              value={searchInput}
+              onChange={(event) => {
+                setSearchInput(event.target.value);
+              }}
+            />
+            {searchInput ? (
+              <button
+                type="button"
+                className="hilog-search-clear"
+                aria-label="Clear log search"
+                onClick={() => {
+                  setSearchInput("");
+                }}
+              >
+                x
+              </button>
+            ) : null}
+          </div>
+
           <button
             type="button"
             className="hilog-button"
@@ -552,7 +940,7 @@ export function HilogConsolePanel({
             type="button"
             className="hilog-button"
             onClick={() => {
-              clearQueueAndTerminal();
+              clearHistoryAndVisible();
             }}
           >
             Clear
