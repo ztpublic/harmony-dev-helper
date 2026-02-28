@@ -1,6 +1,6 @@
 import type { HostCapabilities } from "@harmony/protocol";
 import type { ConnectionState, HarmonyWebSocketClient } from "@harmony/webview-bridge";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { DeviceSelectionState } from "./types";
 
 interface UseHdcDeviceSelectionArgs {
@@ -15,7 +15,25 @@ interface UseHdcDeviceSelectionResult extends DeviceSelectionState {
   selectDevice: (connectKey: string) => void;
 }
 
+interface ListTargetsOptions {
+  silent?: boolean;
+}
+
 const DEFAULT_POLL_MS = 5_000;
+
+function haveSameTargets(currentTargets: string[], nextTargets: string[]): boolean {
+  if (currentTargets.length !== nextTargets.length) {
+    return false;
+  }
+
+  for (let index = 0; index < currentTargets.length; index += 1) {
+    if (currentTargets[index] !== nextTargets[index]) {
+      return false;
+    }
+  }
+
+  return true;
+}
 
 function toErrorMessage(error: unknown): string {
   if (error instanceof Error) {
@@ -37,11 +55,12 @@ export function useHdcDeviceSelection({
   const [selectedDevice, setSelectedDevice] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>();
+  const isListTargetsInFlight = useRef(false);
 
   const isSupported = Boolean(capabilities?.["hdc.listTargets"]);
 
   const syncDevices = useCallback((nextTargets: string[]) => {
-    setDevices(nextTargets);
+    setDevices((currentTargets) => (haveSameTargets(currentTargets, nextTargets) ? currentTargets : nextTargets));
     setSelectedDevice((current) => {
       if (nextTargets.length === 0) {
         return null;
@@ -56,22 +75,36 @@ export function useHdcDeviceSelection({
     });
   }, []);
 
-  const listTargets = useCallback(async () => {
+  const listTargets = useCallback(async ({ silent = false }: ListTargetsOptions = {}) => {
     if (!client || connectionState !== "open") {
       return;
     }
 
-    setIsRefreshing(true);
+    if (isListTargetsInFlight.current) {
+      return;
+    }
+
+    isListTargetsInFlight.current = true;
+    if (!silent) {
+      setIsRefreshing(true);
+    }
+
     try {
       const result = await client.invoke("hdc.listTargets", {});
       syncDevices(result.targets);
       setStatus("ready");
       setErrorMessage(undefined);
     } catch (error) {
-      setStatus("error");
-      setErrorMessage(toErrorMessage(error));
+      if (!silent) {
+        setStatus("error");
+        setErrorMessage(toErrorMessage(error));
+      }
     } finally {
-      setIsRefreshing(false);
+      if (!silent) {
+        setIsRefreshing(false);
+      }
+
+      isListTargetsInFlight.current = false;
     }
   }, [client, connectionState, syncDevices]);
 
@@ -145,7 +178,7 @@ export function useHdcDeviceSelection({
     }
 
     const intervalId = window.setInterval(() => {
-      void listTargets();
+      void listTargets({ silent: true });
     }, pollMs);
 
     return () => {
