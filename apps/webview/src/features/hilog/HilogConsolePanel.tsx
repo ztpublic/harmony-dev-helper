@@ -300,6 +300,10 @@ function isHilogStateMessage(message: HostMessage): message is HostMessage & {
   return message.type === "event" && message.payload.name === "hdc.hilog.state";
 }
 
+function isAtEnd(terminal: Terminal): boolean {
+  return terminal.buffer.active.viewportY >= terminal.buffer.active.baseY;
+}
+
 export function HilogConsolePanel({
   client,
   connectionState,
@@ -327,13 +331,13 @@ export function HilogConsolePanel({
     connectKey: string;
     levelFilter?: string;
   } | null>(null);
-  const autoScrollRef = useRef(true);
+  const stickToEndRef = useRef(true);
   const manualPausedRef = useRef(false);
   const levelFilterRef = useRef<HTMLDivElement>(null);
 
   const [status, setStatus] = useState<HilogStatus>("idle");
   const [manualPaused, setManualPaused] = useState(false);
-  const [autoScroll, setAutoScroll] = useState(true);
+  const [stickToEnd, setStickToEnd] = useState(true);
   const [selectedLevelCodes, setSelectedLevelCodes] = useState<HilogLevelCode[]>(() => [
     ...DEFAULT_LEVEL_CODES
   ]);
@@ -342,7 +346,7 @@ export function HilogConsolePanel({
   const [isLevelDropdownOpen, setIsLevelDropdownOpen] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string>();
 
-  autoScrollRef.current = autoScroll;
+  stickToEndRef.current = stickToEnd;
   manualPausedRef.current = manualPaused;
   const normalizedSearch = useMemo(() => normalizeSearchQuery(activeSearch), [activeSearch]);
   const highlightPalette = useMemo<HighlightPalette>(
@@ -475,14 +479,17 @@ export function HilogConsolePanel({
         return;
       }
 
+      const preWriteViewportY = terminal.buffer.active.viewportY;
       writingRef.current = true;
       terminal.write(chunk, () => {
         writingRef.current = false;
 
         if (chunkVersion !== viewVersionRef.current) {
           terminal.clear();
-        } else if (autoScrollRef.current) {
+        } else if (stickToEndRef.current) {
           terminal.scrollToBottom();
+        } else {
+          terminal.scrollToLine(Math.min(preWriteViewportY, terminal.buffer.active.baseY));
         }
 
         if (queueRef.current.length > 0) {
@@ -521,6 +528,16 @@ export function HilogConsolePanel({
 
     fit();
 
+    const scrollDisposable = terminal.onScroll(() => {
+      if (!stickToEndRef.current) {
+        return;
+      }
+
+      if (!isAtEnd(terminal)) {
+        setStickToEnd(false);
+      }
+    });
+
     let observer: ResizeObserver | undefined;
     if (typeof ResizeObserver !== "undefined") {
       observer = new ResizeObserver(() => {
@@ -537,6 +554,7 @@ export function HilogConsolePanel({
         rafIdRef.current = null;
       }
 
+      scrollDisposable.dispose();
       observer?.disconnect();
       window.removeEventListener("resize", fit);
       terminal.dispose();
@@ -928,6 +946,23 @@ export function HilogConsolePanel({
           <button
             type="button"
             className="hilog-button"
+            aria-pressed={stickToEnd}
+            onClick={() => {
+              setStickToEnd((current) => {
+                const next = !current;
+                if (next) {
+                  terminalRef.current?.scrollToBottom();
+                }
+                return next;
+              });
+            }}
+          >
+            Stick to end
+          </button>
+
+          <button
+            type="button"
+            className="hilog-button"
             disabled={!canStreamControl}
             onClick={() => {
               setManualPaused((current) => !current);
@@ -945,18 +980,6 @@ export function HilogConsolePanel({
           >
             Clear
           </button>
-
-          <label className="hilog-toggle" htmlFor="hilog-autoscroll">
-            <input
-              id="hilog-autoscroll"
-              type="checkbox"
-              checked={autoScroll}
-              onChange={(event) => {
-                setAutoScroll(event.target.checked);
-              }}
-            />
-            Auto-scroll
-          </label>
         </div>
       </div>
 

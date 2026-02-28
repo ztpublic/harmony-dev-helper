@@ -472,6 +472,16 @@ body {
   background: var(--surface-control-hover);
 }
 
+.hilog-button[aria-pressed="true"] {
+  border-color: var(--accent-primary);
+  background: color-mix(in srgb, var(--accent-primary) 16%, var(--surface-control));
+  color: var(--text-primary);
+}
+
+.hilog-button[aria-pressed="true"]:hover {
+  background: color-mix(in srgb, var(--accent-primary) 22%, var(--surface-control-hover));
+}
+
 .hilog-button:disabled {
   opacity: 0.6;
   cursor: default;
@@ -581,18 +591,6 @@ body {
 
 .hilog-search-clear:hover {
   background: var(--surface-control-hover);
-}
-
-.hilog-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.35rem;
-  font-size: 0.8rem;
-  color: var(--text-secondary);
-}
-
-.hilog-toggle input {
-  accent-color: var(--accent-primary);
 }
 
 .hilog-error {
