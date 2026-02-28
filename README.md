@@ -1,36 +1,65 @@
 # Harmony Dev Helper Monorepo
 
-Shared webview architecture for:
+Shared Harmony webview architecture for:
 - Tauri desktop app
-- VSCode extension webview host
-- IntelliJ plugin webview host
+- VSCode extension
+- IntelliJ plugin
 
-All hosts communicate with the same frontend over websocket (no Tauri `invoke` commands).
+All hosts use the same frontend and communicate with the backend over WebSocket (no Tauri `invoke` API path).
+
+## Current state
+
+The shared webview currently includes:
+- HDC target discovery/selection
+- Hilog live console (streaming, pause/resume, clear, auto-scroll, dropped-line counter)
+- Settings dialog for:
+  - HDC binary path (custom override + validation)
+  - Hilog history limit
+  - App theme (dark/light)
+
+HDC binary config is persisted to:
+- `~/.harmony-dev-helper/hdc-bridge.json`
 
 ## Stack
 
 - `pnpm` workspaces + `turbo`
-- React + TypeScript + Vite (shared webview)
-- Rust websocket bridge + `hdckit-rs`
-- Tauri v2 for desktop shell
-- Storybook for UI components
+- React + TypeScript + Vite (`apps/webview`)
+- Rust WebSocket bridge (`apps/hdc-bridge-rs`)
+- Vendored `hdckit-rs` (`apps/desktop/src-tauri/vendor/hdckit-rs`)
+- Tauri v2 desktop shell
+- Storybook for webview component work
 
-## Repo layout
+## Repository layout
 
 - `apps/webview`: shared React UI used by all hosts
-- `apps/hdc-bridge-rs`: shared Rust websocket bridge (library + sidecar binary)
-- `apps/desktop`: Tauri desktop shell using `hdc-bridge-rs` in-process
-- `apps/vscode-extension`: VSCode host that launches `hdc-bridge-rs` sidecar
-- `apps/intellij-plugin`: IntelliJ host that launches `hdc-bridge-rs` sidecar
-- `packages/protocol`: shared websocket protocol/types
-- `packages/webview-bridge`: shared websocket client + typed invoke helper
+- `apps/hdc-bridge-rs`: shared Rust backend bridge (library + binary)
+- `apps/desktop`: Tauri shell; embeds bridge in-process
+- `apps/vscode-extension`: VSCode host; starts bridge sidecar
+- `apps/intellij-plugin`: IntelliJ host; starts bridge sidecar
+- `packages/protocol`: shared protocol types/envelopes
+- `packages/webview-bridge`: shared browser WebSocket client + typed invoke helper
 
-## Quick start
+## Requirements
+
+- Node.js + `pnpm` (workspace uses `pnpm@10`)
+- Rust toolchain (`cargo`) for desktop and sidecar fallback flows
+- IntelliJ plugin development: JDK 17
+
+## Common commands
 
 ```bash
 pnpm install
 pnpm dev:webview
+pnpm dev:desktop
+pnpm dev:vscode
+pnpm storybook
+pnpm prepare:hosts
+pnpm build
+pnpm typecheck
+pnpm lint
 ```
+
+## Host development
 
 ### Desktop (Tauri)
 
@@ -38,82 +67,78 @@ pnpm dev:webview
 pnpm dev:desktop
 ```
 
-### Storybook
+Starts the bridge in-process on `ws://127.0.0.1:8787`.
+
+### VSCode extension
+
+Build/watch extension TypeScript:
 
 ```bash
-pnpm storybook
+pnpm --filter @harmony/vscode-extension watch
 ```
 
-### Plugin host assets
-
-Build and copy webview bundle into plugin host resources:
+Before testing packaged webview assets in VSCode, sync the built shared webview:
 
 ```bash
 pnpm prepare:hosts
 ```
 
-### VSCode extension
-
-```bash
-pnpm --filter @harmony/vscode-extension build
-```
-
 ### IntelliJ plugin
 
+1. Build and sync webview assets:
 ```bash
-cd apps/intellij-plugin
-# run the `runIde` Gradle task from IntelliJ's Gradle tool window
+pnpm prepare:hosts
 ```
+2. Open `apps/intellij-plugin` in IntelliJ and run the `runIde` Gradle task.
 
 Notes:
-- IntelliJ serves `src/main/resources/webview` assets (copied by `pnpm prepare:hosts`) via an embedded local HTTP server by default.
-- Override IntelliJ webview URL with JVM option: `-Dharmony.webview.url=http://127.0.0.1:1420`.
+- By default IntelliJ serves `src/main/resources/webview` via an embedded server (`http://127.0.0.1:8790`).
+- You can override the URL with:
+  `-Dharmony.webview.url=http://127.0.0.1:1420`
 
-## Shared Rust bridge model
+## Bridge runtime model
 
 `apps/hdc-bridge-rs` is the single HDC backend implementation.
 
-- Desktop embeds it in-process and listens on `ws://127.0.0.1:8787`.
-- VSCode launches it as a sidecar on `ws://127.0.0.1:8788`.
-- IntelliJ launches it as a sidecar on `ws://127.0.0.1:8789`.
+- Desktop: embedded bridge at `ws://127.0.0.1:8787`
+- VSCode: sidecar bridge at `ws://127.0.0.1:8788`
+- IntelliJ: sidecar bridge at `ws://127.0.0.1:8789`
 
-### Plugin-side sidecar startup (dev)
+### Sidecar startup order (VSCode + IntelliJ)
 
-Plugin hosts start the bridge in this order:
+1. `HARMONY_HDC_BRIDGE_BIN` (absolute path to prebuilt `hdc-bridge-rs`)
+2. Fallback:
+   `cargo run --manifest-path apps/hdc-bridge-rs/Cargo.toml -- --ws-addr <host:port>`
 
-1. `HARMONY_HDC_BRIDGE_BIN` (absolute path to prebuilt `hdc-bridge-rs` binary)
-2. fallback: `cargo run --manifest-path apps/hdc-bridge-rs/Cargo.toml -- --ws-addr <host:port>`
-
-Optional override for manifest lookup:
+Optional manifest override:
 - `HARMONY_HDC_BRIDGE_MANIFEST_PATH`
 
-Because the fallback uses Cargo, Rust toolchain is required in plugin-host development environments.
+## Frontend bootstrap contract
 
-## Bridge contract
-
-Hosts inject one of:
+Hosts provide one of:
 - `window.__HARMONY_BRIDGE__ = { host, wsUrl }`
-- or query params: `?host=intellij&wsUrl=ws://127.0.0.1:8789`
+- query params: `?host=<host>&wsUrl=<ws-url>`
 
-Frontend resolves bridge config in this order:
+Resolution order in `@harmony/webview-bridge`:
 1. `window.__HARMONY_BRIDGE__`
 2. `location.search` (`host`, `wsUrl`)
-3. environment fallback (Tauri/VSCode/browser)
+3. environment fallback (`tauri`/`vscode`/`browser`)
 
-### Typed invoke actions
+## Protocol contract (current)
 
-The shared Rust bridge currently supports:
+Envelope shape:
+- `{ id, type, payload, ts }`
 
-- `host.getCapabilities` with `args: {}`
-- `hdc.listTargets` with `args: {}`
-- `hdc.getParameters` with `args: { connectKey: string }`
-- `hdc.shell` with `args: { connectKey: string, command: string }`
-
-`host.getCapabilities` result includes:
+Supported invoke actions:
 - `host.getCapabilities`
 - `hdc.listTargets`
 - `hdc.getParameters`
 - `hdc.shell`
+- `hdc.getBinConfig`
+- `hdc.setBinPath`
+- `hdc.hilog.subscribe`
+- `hdc.hilog.unsubscribe`
 
-All websocket envelopes remain:
-- request/response fields: `id`, `type`, `payload`, `ts`
+Additional async host events:
+- `hdc.hilog.batch`
+- `hdc.hilog.state`
