@@ -44,6 +44,7 @@ type HighlightPalette = {
 
 const MAX_WRITE_BYTES_PER_FRAME = 128 * 1024;
 const SEARCH_DEBOUNCE_MS = 250;
+const PID_TRIGGER_MAX_LABEL_CHARS = 36;
 const ANSI_SEQUENCE_REGEX = /\x1b\[[0-9;]*m/g;
 const DARK_HIGHLIGHT_PALETTE: HighlightPalette = {
   open: "\x1b[48;2;102;77;0m",
@@ -281,6 +282,27 @@ function buildLevelFilterArg(codes: readonly HilogLevelCode[]): string | undefin
   }
 
   return normalized.join(",");
+}
+
+function truncateWithEllipsis(value: string, maxChars: number): string {
+  if (maxChars <= 0 || value.length <= maxChars) {
+    return value;
+  }
+
+  if (maxChars <= 3) {
+    return value.slice(0, maxChars);
+  }
+
+  return `${value.slice(0, maxChars - 3)}...`;
+}
+
+function comparePidOptionsByCommand(a: HdcHilogPidOption, b: HdcHilogPidOption): number {
+  const commandOrder = a.command.localeCompare(b.command, undefined, { sensitivity: "base" });
+  if (commandOrder !== 0) {
+    return commandOrder;
+  }
+
+  return a.pid - b.pid;
 }
 
 function toErrorMessage(error: unknown): string {
@@ -695,7 +717,6 @@ export function HilogConsolePanel({
     setSelectedPid(null);
     setPidError(undefined);
     setIsPidDropdownOpen(false);
-    void refreshPidOptions();
   }, [active, connectionState, hdcAvailable, selectedDevice, refreshPidOptions]);
 
   useEffect(() => {
@@ -975,13 +996,22 @@ export function HilogConsolePanel({
 
     return `Level: ${selectedLevelCodes.length} selected`;
   }, [selectedLevelCodes]);
+  const sortedPidOptions = useMemo(
+    () => [...pidOptions].sort(comparePidOptionsByCommand),
+    [pidOptions]
+  );
+  const selectedPidOption = useMemo(
+    () => (selectedPid === null ? undefined : pidOptions.find((option) => option.pid === selectedPid)),
+    [pidOptions, selectedPid]
+  );
   const pidFilterLabel = useMemo(() => {
     if (selectedPid === null) {
       return "PID: All";
     }
 
-    return `PID: ${selectedPid}`;
-  }, [selectedPid]);
+    const command = selectedPidOption?.command ?? String(selectedPid);
+    return `PID: ${truncateWithEllipsis(command, PID_TRIGGER_MAX_LABEL_CHARS)}`;
+  }, [selectedPid, selectedPidOption]);
 
   const canStreamControl = connectionState === "open" && hdcAvailable && selectedDevice !== null;
 
@@ -1039,13 +1069,20 @@ export function HilogConsolePanel({
               className="hilog-pid-trigger"
               aria-haspopup="true"
               aria-expanded={isPidDropdownOpen}
-              disabled={!canStreamControl || isPidLoading}
+              disabled={!canStreamControl}
               onClick={() => {
                 setIsLevelDropdownOpen(false);
-                setIsPidDropdownOpen((current) => !current);
+                setIsPidDropdownOpen((current) => {
+                  const next = !current;
+                  if (next) {
+                    void refreshPidOptions();
+                  }
+
+                  return next;
+                });
               }}
             >
-              {pidFilterLabel}
+              <span className="hilog-pid-trigger-label">{pidFilterLabel}</span>
               <span className="hilog-pid-trigger-caret">v</span>
             </button>
 
@@ -1061,7 +1098,7 @@ export function HilogConsolePanel({
                 >
                   All
                 </button>
-                {pidOptions.map((option) => (
+                {sortedPidOptions.map((option) => (
                   <button
                     key={option.pid}
                     type="button"
@@ -1071,23 +1108,12 @@ export function HilogConsolePanel({
                       setIsPidDropdownOpen(false);
                     }}
                   >
-                    {option.pid} — {option.command}
+                    {option.command} — {option.pid}
                   </button>
                 ))}
               </div>
             ) : null}
           </div>
-
-          <button
-            type="button"
-            className="hilog-button"
-            disabled={!canStreamControl || isPidLoading}
-            onClick={() => {
-              void refreshPidOptions();
-            }}
-          >
-            {isPidLoading ? "Refreshing PIDs..." : "Refresh PIDs"}
-          </button>
 
           <div className="hilog-search">
             <input

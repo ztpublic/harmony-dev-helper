@@ -569,6 +569,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 0.45rem;
+  max-width: 340px;
 }
 
 .hilog-pid-trigger:hover {
@@ -583,6 +584,14 @@ body {
 .hilog-pid-trigger-caret {
   color: var(--text-muted);
   font-size: 0.72rem;
+  flex: 0 0 auto;
+}
+
+.hilog-pid-trigger-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .hilog-pid-menu {
@@ -696,6 +705,7 @@ body {
   .hilog-level-trigger,
   .hilog-pid-trigger {
     min-width: 110px;
+    max-width: min(72vw, 300px);
   }
 
   .hilog-pid-menu {
