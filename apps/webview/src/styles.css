@@ -103,9 +103,16 @@
   box-sizing: border-box;
 }
 
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+}
+
 body {
   margin: 0;
-  min-height: 100vh;
+  min-height: 100%;
   color: var(--text-primary);
   background: var(--bg-app);
   font-size: 13px;
@@ -125,7 +132,10 @@ body {
   margin: 0;
   margin-top: 0;
   padding: 0;
-  display: block;
+  height: 100%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .main-tabbed-panel {
@@ -134,6 +144,10 @@ body {
   background: var(--surface-panel);
   box-shadow: var(--shadow-panel);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .main-tabbed-header {
@@ -141,7 +155,7 @@ body {
   align-items: center;
   justify-content: space-between;
   gap: 0.55rem;
-  padding: 0.55rem 0.55rem 0;
+  padding: 0 0.55rem 0;
   background: var(--surface-tab);
   border-bottom: 1px solid var(--border-subtle);
 }
@@ -189,6 +203,10 @@ body {
 
 .main-tab-panel {
   padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .main-tab-placeholder {
@@ -436,8 +454,11 @@ body {
 }
 
 .hilog-panel {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 0.65rem;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .hilog-toolbar {
@@ -715,21 +736,23 @@ body {
 }
 
 .hilog-terminal-frame {
-  border-radius: 10px;
-  border: 1px solid var(--border-default);
-  background: var(--terminal-frame-bg);
-  padding: 0.4rem;
-  min-height: calc(100vh - 190px);
+  border-radius: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  margin: 0;
+  flex: 1 1 auto;
+  min-height: 220px;
 }
 
 .hilog-terminal {
   width: 100%;
-  height: calc(100vh - 220px);
-  min-height: 220px;
+  height: 100%;
+  min-height: 0;
 }
 
 .hilog-terminal .xterm-viewport {
-  border-radius: 6px;
+  border-radius: 0;
 }
 
 .hilog-context-menu {
@@ -787,7 +810,7 @@ body {
   }
 
   .hilog-terminal {
-    height: 50vh;
+    height: 100%;
   }
 }
 

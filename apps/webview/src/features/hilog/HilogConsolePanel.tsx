@@ -48,6 +48,13 @@ type HighlightPalette = {
   open: string;
   close: string;
 };
+type TerminalPalette = {
+  background: string;
+  foreground: string;
+  cursor: string;
+  cursorAccent: string;
+  selectionBackground: string;
+};
 type OpenableLinkTarget =
   | {
       kind: "url";
@@ -97,6 +104,22 @@ const DARK_HIGHLIGHT_PALETTE: HighlightPalette = {
 const LIGHT_HIGHLIGHT_PALETTE: HighlightPalette = {
   open: "\x1b[48;2;255;224;130m",
   close: "\x1b[49m"
+};
+const TERMINAL_THEME_BY_APP_THEME: Record<AppTheme, TerminalPalette> = {
+  dark: {
+    background: "#1f1f1f",
+    foreground: "#cccccc",
+    cursor: "#cccccc",
+    cursorAccent: "#1f1f1f",
+    selectionBackground: "rgba(204, 204, 204, 0.25)"
+  },
+  light: {
+    background: "#ffffff",
+    foreground: "#3b3b3b",
+    cursor: "#3b3b3b",
+    cursorAccent: "#ffffff",
+    selectionBackground: "rgba(59, 59, 59, 0.2)"
+  }
 };
 const HILOG_LEVEL_OPTIONS: ReadonlyArray<{ code: HilogLevelCode; label: string }> = [
   { code: "D", label: "Debug" },
@@ -662,6 +685,10 @@ function isAtEnd(terminal: Terminal): boolean {
   return terminal.buffer.active.viewportY >= terminal.buffer.active.baseY;
 }
 
+function resolveTerminalPalette(theme: AppTheme): TerminalPalette {
+  return TERMINAL_THEME_BY_APP_THEME[theme];
+}
+
 export function HilogConsolePanel({
   client,
   connectionState,
@@ -1099,7 +1126,8 @@ export function HilogConsolePanel({
       convertEol: true,
       allowTransparency: true,
       cursorBlink: false,
-      disableStdin: true
+      disableStdin: true,
+      theme: resolveTerminalPalette(theme)
     });
 
     const fitAddon = new FitAddon();
@@ -1241,6 +1269,15 @@ export function HilogConsolePanel({
       queueRef.current = [];
     };
   }, [activateOpenableTarget]);
+
+  useEffect(() => {
+    const terminal = terminalRef.current;
+    if (!terminal) {
+      return;
+    }
+
+    terminal.options.theme = resolveTerminalPalette(theme);
+  }, [theme]);
 
   const redrawFromHistory = useCallback(() => {
     clearVisibleOnly();
