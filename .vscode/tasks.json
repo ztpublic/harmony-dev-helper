@@ -2,6 +2,15 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "harmony:vscode-extension up-to-date",
+      "dependsOn": [
+        "harmony:vscode-extension prepare-host",
+        "harmony:vscode-extension build"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+    {
       "label": "harmony:vscode-extension prepare-host",
       "type": "shell",
       "command": "pnpm run prepare:vscode-host",
