@@ -29,6 +29,7 @@ export interface IdeCapabilities {
   "ide.openFile": boolean;
   "ide.openPath": boolean;
   "ide.openExternal": boolean;
+  "ide.openChat": boolean;
 }
 
 export interface IdeOpenFileArgs {
@@ -51,17 +52,24 @@ export interface IdeOpenExternalArgs {
   url: string;
 }
 
+export interface IdeOpenChatArgs {
+  query: string;
+  isPartialQuery?: boolean;
+}
+
 export type IdeInvokeAction =
   | "ide.getCapabilities"
   | "ide.openFile"
   | "ide.openPath"
-  | "ide.openExternal";
+  | "ide.openExternal"
+  | "ide.openChat";
 
 export interface IdeInvokeArgsByAction {
   "ide.getCapabilities": Record<string, never>;
   "ide.openFile": IdeOpenFileArgs;
   "ide.openPath": IdeOpenPathArgs;
   "ide.openExternal": IdeOpenExternalArgs;
+  "ide.openChat": IdeOpenChatArgs;
 }
 
 export interface IdeInvokeResultByAction {
@@ -69,6 +77,7 @@ export interface IdeInvokeResultByAction {
   "ide.openFile": { opened: true };
   "ide.openPath": { opened: boolean };
   "ide.openExternal": { opened: boolean };
+  "ide.openChat": { opened: boolean };
 }
 
 type IdeInvokePayload = {

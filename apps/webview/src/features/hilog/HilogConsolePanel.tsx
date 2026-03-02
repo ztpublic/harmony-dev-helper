@@ -87,10 +87,18 @@ type TerminalContextMenuState = {
   y: number;
   canCopy: boolean;
 };
+type SelectionChatButtonState = {
+  x: number;
+  y: number;
+  query: string;
+};
 
 const MAX_WRITE_BYTES_PER_FRAME = 128 * 1024;
 const SEARCH_DEBOUNCE_MS = 250;
 const PID_TRIGGER_MAX_LABEL_CHARS = 36;
+const SELECTION_CHAT_BUTTON_OFFSET_X = 8;
+const SELECTION_CHAT_BUTTON_OFFSET_Y = 6;
+const SELECTION_CHAT_BUTTON_VIEWPORT_MARGIN = 8;
 const ANSI_SEQUENCE_REGEX = /\x1b\[[0-9;]*m/g;
 const LINK_TOKEN_REGEX = /\S+/g;
 const HTTP_LINK_IN_TOKEN_REGEX = /https?:\/\/[^\s]+/gi;
@@ -730,6 +738,7 @@ export function HilogConsolePanel({
   const levelFilterRef = useRef<HTMLDivElement>(null);
   const pidFilterRef = useRef<HTMLDivElement>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
+  const selectionChatButtonRef = useRef<HTMLButtonElement>(null);
   const pidRefreshRequestIdRef = useRef(0);
 
   const [status, setStatus] = useState<HilogStatus>("idle");
@@ -748,6 +757,8 @@ export function HilogConsolePanel({
   const [pidError, setPidError] = useState<string>();
   const [errorMessage, setErrorMessage] = useState<string>();
   const [terminalContextMenu, setTerminalContextMenu] = useState<TerminalContextMenuState | null>(null);
+  const [selectionChatButton, setSelectionChatButton] = useState<SelectionChatButtonState | null>(null);
+  const [canOpenChat, setCanOpenChat] = useState(false);
 
   stickToEndRef.current = stickToEnd;
   manualPausedRef.current = manualPaused;
@@ -915,6 +926,86 @@ export function HilogConsolePanel({
     clearHistoryAndVisible();
     setTerminalContextMenu(null);
   }, [clearHistoryAndVisible]);
+
+  const updateSelectionChatButton = useCallback((terminal: Terminal) => {
+    const query = terminal.getSelection();
+    const selectionRange = terminal.getSelectionPosition();
+    if (!query || !selectionRange) {
+      setSelectionChatButton(null);
+      return;
+    }
+
+    const screenElement = terminal.element?.querySelector(".xterm-screen");
+    if (!(screenElement instanceof HTMLElement)) {
+      setSelectionChatButton(null);
+      return;
+    }
+
+    const screenBounds = screenElement.getBoundingClientRect();
+    const cellWidth = screenBounds.width / terminal.cols;
+    const cellHeight = screenBounds.height / terminal.rows;
+    if (!Number.isFinite(cellWidth) || !Number.isFinite(cellHeight) || cellWidth <= 0 || cellHeight <= 0) {
+      setSelectionChatButton(null);
+      return;
+    }
+
+    const viewportRow = selectionRange.end.y - 1 - terminal.buffer.active.viewportY;
+    if (viewportRow < 0 || viewportRow >= terminal.rows) {
+      setSelectionChatButton(null);
+      return;
+    }
+
+    const endColumn = Math.min(Math.max(selectionRange.end.x, 1), terminal.cols);
+    const maxAnchorX = Math.max(
+      SELECTION_CHAT_BUTTON_VIEWPORT_MARGIN,
+      window.innerWidth - SELECTION_CHAT_BUTTON_VIEWPORT_MARGIN
+    );
+    const maxAnchorY = Math.max(
+      SELECTION_CHAT_BUTTON_VIEWPORT_MARGIN,
+      window.innerHeight - SELECTION_CHAT_BUTTON_VIEWPORT_MARGIN
+    );
+    const nextX = Math.min(
+      Math.max(
+        screenBounds.left + endColumn * cellWidth + SELECTION_CHAT_BUTTON_OFFSET_X,
+        SELECTION_CHAT_BUTTON_VIEWPORT_MARGIN
+      ),
+      maxAnchorX
+    );
+    const nextY = Math.min(
+      Math.max(
+        screenBounds.top + (viewportRow + 1) * cellHeight + SELECTION_CHAT_BUTTON_OFFSET_Y,
+        SELECTION_CHAT_BUTTON_VIEWPORT_MARGIN
+      ),
+      maxAnchorY
+    );
+
+    setSelectionChatButton((current) => {
+      if (current?.query === query && current.x === nextX && current.y === nextY) {
+        return current;
+      }
+
+      return {
+        x: nextX,
+        y: nextY,
+        query
+      };
+    });
+  }, []);
+
+  const handleSelectionAddToChat = useCallback(async () => {
+    if (!selectionChatButton) {
+      return;
+    }
+
+    try {
+      await hostBridgeRef.current?.invoke("ide.openChat", {
+        query: selectionChatButton.query,
+        isPartialQuery: true
+      });
+    } catch {
+      // no-op
+    }
+  }, [selectionChatButton]);
 
   const scheduleFlush = useCallback(() => {
     if (rafIdRef.current !== null) {
@@ -1101,8 +1192,39 @@ export function HilogConsolePanel({
   );
 
   useEffect(() => {
-    void getHostCapabilities();
+    let cancelled = false;
+
+    void getHostCapabilities().then((capabilities) => {
+      if (cancelled) {
+        return;
+      }
+
+      setCanOpenChat(Boolean(capabilities?.["ide.openChat"]));
+    });
+
+    return () => {
+      cancelled = true;
+    };
   }, [getHostCapabilities]);
+
+  useEffect(() => {
+    if (!canOpenChat) {
+      setSelectionChatButton(null);
+    }
+  }, [canOpenChat]);
+
+  useEffect(() => {
+    if (!canOpenChat) {
+      return;
+    }
+
+    const terminal = terminalRef.current;
+    if (!terminal?.hasSelection()) {
+      return;
+    }
+
+    updateSelectionChatButton(terminal);
+  }, [canOpenChat, updateSelectionChatButton]);
 
   useEffect(() => {
     return () => {
@@ -1225,10 +1347,22 @@ export function HilogConsolePanel({
     };
 
     fit();
+    const updateSelectionButton = () => {
+      if (!canOpenChat) {
+        setSelectionChatButton(null);
+        return;
+      }
+
+      updateSelectionChatButton(terminal);
+    };
 
     const scrollDisposable = terminal.onScroll(() => {
       if (writingRef.current) {
         writeScrollCountRef.current += 1;
+      }
+
+      if (terminal.hasSelection()) {
+        updateSelectionButton();
       }
 
       if (!stickToEndRef.current) {
@@ -1237,6 +1371,34 @@ export function HilogConsolePanel({
 
       if (!isAtEnd(terminal)) {
         setStickToEnd(false);
+      }
+    });
+    const selectionDisposable = terminal.onSelectionChange(() => {
+      updateSelectionButton();
+      setTerminalContextMenu((current) => {
+        if (!current) {
+          return current;
+        }
+
+        const canCopy = terminal.hasSelection();
+        if (current.canCopy === canCopy) {
+          return current;
+        }
+
+        return {
+          ...current,
+          canCopy
+        };
+      });
+    });
+    const renderDisposable = terminal.onRender(() => {
+      if (terminal.hasSelection()) {
+        updateSelectionButton();
+      }
+    });
+    const resizeDisposable = terminal.onResize(() => {
+      if (terminal.hasSelection()) {
+        updateSelectionButton();
       }
     });
 
@@ -1258,6 +1420,9 @@ export function HilogConsolePanel({
 
       linkProviderDisposable.dispose();
       scrollDisposable.dispose();
+      selectionDisposable.dispose();
+      renderDisposable.dispose();
+      resizeDisposable.dispose();
       container.removeEventListener("mousedown", onTerminalMouseDown, true);
       container.removeEventListener("contextmenu", onTerminalContextMenu, true);
       observer?.disconnect();
@@ -1265,10 +1430,11 @@ export function HilogConsolePanel({
       terminal.dispose();
       terminalRef.current = null;
       fitAddonRef.current = null;
+      setSelectionChatButton(null);
       viewVersionRef.current += 1;
       queueRef.current = [];
     };
-  }, [activateOpenableTarget]);
+  }, [activateOpenableTarget, canOpenChat, updateSelectionChatButton]);
 
   useEffect(() => {
     const terminal = terminalRef.current;
@@ -1412,6 +1578,52 @@ export function HilogConsolePanel({
       };
     });
   }, [terminalContextMenu]);
+
+  useEffect(() => {
+    if (!selectionChatButton) {
+      return;
+    }
+
+    const buttonElement = selectionChatButtonRef.current;
+    if (!buttonElement) {
+      return;
+    }
+
+    const bounds = buttonElement.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const margin = SELECTION_CHAT_BUTTON_VIEWPORT_MARGIN;
+    let nextX = selectionChatButton.x;
+    let nextY = selectionChatButton.y;
+
+    if (nextX + bounds.width + margin > viewportWidth) {
+      nextX = Math.max(margin, viewportWidth - bounds.width - margin);
+    }
+
+    if (nextY + bounds.height + margin > viewportHeight) {
+      nextY = Math.max(margin, viewportHeight - bounds.height - margin);
+    }
+
+    if (nextX === selectionChatButton.x && nextY === selectionChatButton.y) {
+      return;
+    }
+
+    setSelectionChatButton((current) => {
+      if (!current) {
+        return current;
+      }
+
+      if (current.x === nextX && current.y === nextY) {
+        return current;
+      }
+
+      return {
+        ...current,
+        x: nextX,
+        y: nextY
+      };
+    });
+  }, [selectionChatButton]);
 
   useEffect(() => {
     if (!terminalContextMenu) {
@@ -1889,6 +2101,27 @@ export function HilogConsolePanel({
       <div className="hilog-terminal-frame">
         <div ref={terminalContainerRef} className="hilog-terminal" />
       </div>
+
+      {canOpenChat && selectionChatButton ? (
+        <button
+          ref={selectionChatButtonRef}
+          type="button"
+          className="hilog-selection-chat-button"
+          style={{
+            left: `${selectionChatButton.x}px`,
+            top: `${selectionChatButton.y}px`
+          }}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onClick={() => {
+            void handleSelectionAddToChat();
+          }}
+        >
+          Add to Chat
+        </button>
+      ) : null}
 
       {terminalContextMenu ? (
         <div

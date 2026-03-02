@@ -24,7 +24,8 @@ type HostBridgeAction =
   | "ide.getCapabilities"
   | "ide.openFile"
   | "ide.openPath"
-  | "ide.openExternal";
+  | "ide.openExternal"
+  | "ide.openChat";
 type HostBridgeErrorCode =
   | "UNSUPPORTED_HOST"
   | "INVALID_ARGS"
@@ -50,6 +51,11 @@ interface IdeOpenPathArgs {
 
 interface IdeOpenExternalArgs {
   url: string;
+}
+
+interface IdeOpenChatArgs {
+  query: string;
+  isPartialQuery?: boolean;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -242,7 +248,8 @@ function isHostBridgeAction(value: unknown): value is HostBridgeAction {
     value === "ide.getCapabilities" ||
     value === "ide.openFile" ||
     value === "ide.openPath" ||
-    value === "ide.openExternal"
+    value === "ide.openExternal" ||
+    value === "ide.openChat"
   );
 }
 
@@ -277,7 +284,8 @@ function createHostBridgeCapabilitiesResult(id: string): HostBridgeResultMessage
         capabilities: {
           "ide.openFile": true,
           "ide.openPath": true,
-          "ide.openExternal": true
+          "ide.openExternal": true,
+          "ide.openChat": true
         }
       }
     }
@@ -319,6 +327,20 @@ function createHostBridgeOpenExternalResult(id: string, opened: boolean): HostBr
     type: "result",
     payload: {
       action: "ide.openExternal",
+      data: {
+        opened
+      }
+    }
+  };
+}
+
+function createHostBridgeOpenChatResult(id: string, opened: boolean): HostBridgeResultMessage {
+  return {
+    channel: HOST_BRIDGE_CHANNEL,
+    id,
+    type: "result",
+    payload: {
+      action: "ide.openChat",
       data: {
         opened
       }
@@ -465,6 +487,27 @@ function parseOpenExternalArgs(args: unknown): IdeOpenExternalArgs | string {
   };
 }
 
+function parseOpenChatArgs(args: unknown): IdeOpenChatArgs | string {
+  if (!isObjectRecord(args)) {
+    return "`args` must be an object";
+  }
+
+  const query = args.query;
+  if (typeof query !== "string" || query.length === 0) {
+    return "`query` must be a non-empty string";
+  }
+
+  const isPartialQuery = parseOptionalBoolean(args.isPartialQuery, "isPartialQuery");
+  if (typeof isPartialQuery === "string") {
+    return isPartialQuery;
+  }
+
+  return {
+    query,
+    isPartialQuery
+  };
+}
+
 async function openFileInEditor(args: IdeOpenFileArgs): Promise<void> {
   if (!fs.existsSync(args.path)) {
     throw new Error("FILE_NOT_FOUND");
@@ -570,6 +613,18 @@ async function openExternalUrl(args: IdeOpenExternalArgs): Promise<boolean> {
   }
 }
 
+async function openChatInIde(args: IdeOpenChatArgs): Promise<boolean> {
+  try {
+    await vscode.commands.executeCommand("workbench.action.chat.open", {
+      query: args.query,
+      isPartialQuery: args.isPartialQuery ?? true
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function handleHostBridgeInvoke(
   raw: unknown,
   webview: vscode.Webview,
@@ -619,6 +674,20 @@ async function handleHostBridgeInvoke(
     const opened = await openPathInIde(parsedArgs);
     output.appendLine(`[host-bridge] ide.openPath opened=${opened}`);
     await webview.postMessage(createHostBridgeOpenPathResult(id, opened));
+    return;
+  }
+
+  if (action === "ide.openChat") {
+    const parsedArgs = parseOpenChatArgs(payload.args);
+    if (typeof parsedArgs === "string") {
+      await webview.postMessage(createHostBridgeError(id, action, "INVALID_ARGS", parsedArgs));
+      return;
+    }
+
+    output.appendLine("[host-bridge] ide.openChat");
+    const opened = await openChatInIde(parsedArgs);
+    output.appendLine(`[host-bridge] ide.openChat opened=${opened}`);
+    await webview.postMessage(createHostBridgeOpenChatResult(id, opened));
     return;
   }
 

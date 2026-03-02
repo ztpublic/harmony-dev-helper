@@ -35,10 +35,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "lint": "tsc -p tsconfig.json --noEmit"
   },
-  "dependencies": {
-    "@harmony/protocol": "workspace:*"
-  },
   "devDependencies": {
+    "@harmony/protocol": "workspace:*",
     "@types/node": "^22.13.10",
     "@types/vscode": "^1.95.0",
     "typescript": "^5.8.2"

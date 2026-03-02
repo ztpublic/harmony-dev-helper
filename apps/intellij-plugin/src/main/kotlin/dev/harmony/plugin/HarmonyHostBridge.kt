@@ -45,12 +45,14 @@ object HarmonyHostBridge {
               .put("ide.openFile", true)
               .put("ide.openPath", false)
               .put("ide.openExternal", false)
+              .put("ide.openChat", false)
           )
         )
       }
       "ide.openFile" -> handleOpenFile(project, id, payload.opt("args"))
       "ide.openPath" -> buildNoopOpenResult(id, action)
       "ide.openExternal" -> buildNoopOpenResult(id, action)
+      "ide.openChat" -> buildNoopOpenResult(id, action)
       else -> buildErrorResponse(id, "ide.openFile", "INVALID_ARGS", "Unsupported host bridge action: $action")
     }
   }
@@ -115,7 +117,8 @@ object HarmonyHostBridge {
       action == "ide.getCapabilities" ||
       action == "ide.openFile" ||
       action == "ide.openPath" ||
-      action == "ide.openExternal"
+      action == "ide.openExternal" ||
+      action == "ide.openChat"
     ) {
       action
     } else {

@@ -117,7 +117,8 @@ function isIdeInvokeAction(value: unknown): value is IdeInvokeAction {
     value === "ide.getCapabilities" ||
     value === "ide.openFile" ||
     value === "ide.openPath" ||
-    value === "ide.openExternal"
+    value === "ide.openExternal" ||
+    value === "ide.openChat"
   );
 }
 

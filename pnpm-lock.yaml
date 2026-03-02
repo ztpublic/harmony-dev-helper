@@ -22,11 +22,10 @@ importers:
         version: 2.10.0
 
   apps/vscode-extension:
-    dependencies:
+    devDependencies:
       '@harmony/protocol':
         specifier: workspace:*
         version: link:../../packages/protocol
-    devDependencies:
       '@types/node':
         specifier: ^22.13.10
         version: 22.19.13

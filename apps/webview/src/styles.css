@@ -762,6 +762,32 @@ body {
   border-radius: 0;
 }
 
+.hilog-selection-chat-button {
+  position: fixed;
+  z-index: 900;
+  border: 1px solid var(--accent-primary-border);
+  border-radius: var(--control-radius);
+  background: var(--accent-primary-bg);
+  color: var(--accent-primary-text);
+  height: calc(var(--control-height) * 0.85);
+  padding: 0 calc(0.7rem * var(--control-scale) * 0.85);
+  font-size: calc(0.78rem * var(--control-font-scale) * 0.85);
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: var(--shadow-dialog);
+}
+
+.hilog-selection-chat-button:hover {
+  background: var(--accent-primary-hover);
+}
+
+.hilog-selection-chat-button:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--focus-ring), var(--shadow-dialog);
+}
+
 .hilog-context-menu {
   position: fixed;
   z-index: 1000;

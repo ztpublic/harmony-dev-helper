@@ -179,9 +179,10 @@ Supported invoke actions:
 - `ide.openFile`
 - `ide.openPath`
 - `ide.openExternal`
+- `ide.openChat`
 
 `ide.getCapabilities` result:
-- `{ capabilities: { "ide.openFile": boolean, "ide.openPath": boolean, "ide.openExternal": boolean } }`
+- `{ capabilities: { "ide.openFile": boolean, "ide.openPath": boolean, "ide.openExternal": boolean, "ide.openChat": boolean } }`
 
 `ide.openFile` args:
 - `path: string` (absolute filesystem path, required)
@@ -211,9 +212,17 @@ Supported invoke actions:
 - `{ opened: boolean }`
 - Invalid URLs or external-open failures return `{ opened: false }` without raising host bridge errors.
 
+`ide.openChat` args:
+- `query: string` (required, chat input text)
+- `isPartialQuery?: boolean` (optional, defaults to host behavior; for VSCode use `true` to fill input without sending)
+
+`ide.openChat` result:
+- `{ opened: boolean }`
+- Unsupported hosts or open failures return `{ opened: false }`.
+
 Host support (current):
-- VSCode extension: `ide.openFile`, `ide.openPath`, `ide.openExternal` all supported.
-- IntelliJ plugin: `ide.openFile` supported; `ide.openPath` and `ide.openExternal` are advertised as unsupported (`false`) and return no-op `{ opened: false }` if invoked.
+- VSCode extension: `ide.openFile`, `ide.openPath`, `ide.openExternal`, `ide.openChat` all supported.
+- IntelliJ plugin: `ide.openFile` supported; `ide.openPath`, `ide.openExternal`, and `ide.openChat` are advertised as unsupported (`false`) and return no-op `{ opened: false }` if invoked.
 
 Host bridge error codes:
 - `UNSUPPORTED_HOST`
