@@ -2,6 +2,11 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
+import type {
+  HostBridgeErrorMessage,
+  HostBridgeInvokeMessage,
+  HostBridgeResultMessage
+} from "@harmony/protocol";
 import * as vscode from "vscode";
 
 const BRIDGE_HOST = "127.0.0.1";
@@ -10,9 +15,26 @@ const BRIDGE_WS_URL = `ws://${BRIDGE_HOST}:${BRIDGE_PORT}`;
 const HARMONY_VIEW_ID = "harmony-main-view";
 const READY_TIMEOUT_MS = 8_000;
 const READY_POLL_INTERVAL_MS = 150;
+const HOST_BRIDGE_CHANNEL = "harmony-host";
 
 let bridgeProcess: ChildProcess | undefined;
 let bridgeStartup: Promise<void> | undefined;
+
+type HostBridgeAction = "ide.getCapabilities" | "ide.openFile";
+type HostBridgeErrorCode =
+  | "UNSUPPORTED_HOST"
+  | "INVALID_ARGS"
+  | "FILE_NOT_FOUND"
+  | "OPEN_FAILED"
+  | "TIMEOUT";
+
+interface IdeOpenFileArgs {
+  path: string;
+  line?: number;
+  column?: number;
+  preview?: boolean;
+  preserveFocus?: boolean;
+}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -195,6 +217,179 @@ function stopBridgeProcess(output: vscode.OutputChannel): void {
   bridgeProcess = undefined;
 }
 
+function isObjectRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function isHostBridgeAction(value: unknown): value is HostBridgeAction {
+  return value === "ide.getCapabilities" || value === "ide.openFile";
+}
+
+function isHostBridgeInvokeMessage(value: unknown): value is HostBridgeInvokeMessage {
+  if (!isObjectRecord(value)) {
+    return false;
+  }
+
+  if (value.channel !== HOST_BRIDGE_CHANNEL || value.type !== "invoke" || typeof value.id !== "string") {
+    return false;
+  }
+
+  if (!isObjectRecord(value.payload)) {
+    return false;
+  }
+
+  if (!isHostBridgeAction(value.payload.action)) {
+    return false;
+  }
+
+  return isObjectRecord(value.payload.args);
+}
+
+function createHostBridgeCapabilitiesResult(id: string): HostBridgeResultMessage {
+  return {
+    channel: HOST_BRIDGE_CHANNEL,
+    id,
+    type: "result",
+    payload: {
+      action: "ide.getCapabilities",
+      data: {
+        capabilities: {
+          "ide.openFile": true
+        }
+      }
+    }
+  };
+}
+
+function createHostBridgeOpenFileResult(id: string): HostBridgeResultMessage {
+  return {
+    channel: HOST_BRIDGE_CHANNEL,
+    id,
+    type: "result",
+    payload: {
+      action: "ide.openFile",
+      data: {
+        opened: true
+      }
+    }
+  };
+}
+
+function createHostBridgeError(
+  id: string,
+  action: HostBridgeAction,
+  code: HostBridgeErrorCode,
+  message: string
+): HostBridgeErrorMessage {
+  return {
+    channel: HOST_BRIDGE_CHANNEL,
+    id,
+    type: "error",
+    payload: {
+      action,
+      code,
+      message
+    }
+  };
+}
+
+function parseOpenFileArgs(args: unknown): IdeOpenFileArgs | string {
+  if (!isObjectRecord(args)) {
+    return "`args` must be an object";
+  }
+
+  const filePath = args.path;
+  if (typeof filePath !== "string" || filePath.trim().length === 0) {
+    return "`path` must be a non-empty string";
+  }
+
+  if (!path.isAbsolute(filePath)) {
+    return "`path` must be an absolute filesystem path";
+  }
+
+  const line = args.line;
+  if (line !== undefined && (typeof line !== "number" || !Number.isInteger(line) || line <= 0)) {
+    return "`line` must be a positive integer when provided";
+  }
+
+  const column = args.column;
+  if (column !== undefined && (typeof column !== "number" || !Number.isInteger(column) || column <= 0)) {
+    return "`column` must be a positive integer when provided";
+  }
+
+  const preview = args.preview;
+  if (preview !== undefined && typeof preview !== "boolean") {
+    return "`preview` must be a boolean when provided";
+  }
+
+  const preserveFocus = args.preserveFocus;
+  if (preserveFocus !== undefined && typeof preserveFocus !== "boolean") {
+    return "`preserveFocus` must be a boolean when provided";
+  }
+
+  return {
+    path: filePath,
+    line: line as number | undefined,
+    column: column as number | undefined,
+    preview,
+    preserveFocus
+  };
+}
+
+async function openFileInEditor(args: IdeOpenFileArgs): Promise<void> {
+  if (!fs.existsSync(args.path)) {
+    throw new Error("FILE_NOT_FOUND");
+  }
+
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(args.path));
+  const requestedLine = (args.line ?? 1) - 1;
+  const line = Math.max(0, Math.min(requestedLine, Math.max(0, document.lineCount - 1)));
+  const maxColumn = document.lineAt(line).text.length;
+  const requestedColumn = (args.column ?? 1) - 1;
+  const column = Math.max(0, Math.min(requestedColumn, maxColumn));
+  const position = new vscode.Position(line, column);
+
+  await vscode.window.showTextDocument(document, {
+    preview: args.preview ?? false,
+    preserveFocus: args.preserveFocus ?? false,
+    selection: new vscode.Selection(position, position)
+  });
+}
+
+async function handleHostBridgeInvoke(
+  raw: unknown,
+  webview: vscode.Webview,
+  output: vscode.OutputChannel
+): Promise<void> {
+  if (!isHostBridgeInvokeMessage(raw)) {
+    return;
+  }
+
+  const { id, payload } = raw;
+  const { action } = payload;
+
+  if (action === "ide.getCapabilities") {
+    await webview.postMessage(createHostBridgeCapabilitiesResult(id));
+    return;
+  }
+
+  const parsedArgs = parseOpenFileArgs(payload.args);
+  if (typeof parsedArgs === "string") {
+    await webview.postMessage(createHostBridgeError(id, action, "INVALID_ARGS", parsedArgs));
+    return;
+  }
+
+  try {
+    await openFileInEditor(parsedArgs);
+    await webview.postMessage(createHostBridgeOpenFileResult(id));
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const code: HostBridgeErrorCode = message === "FILE_NOT_FOUND" ? "FILE_NOT_FOUND" : "OPEN_FAILED";
+    output.appendLine(`[host-bridge:${code}] ${message}`);
+    await webview.postMessage(createHostBridgeError(id, action, code, message));
+  }
+}
+
 function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {
   const distRoot = vscode.Uri.joinPath(extensionUri, "media", "webview");
   const scriptUri = webview.asWebviewUri(vscode.Uri.joinPath(distRoot, "assets", "main.js"));
@@ -232,6 +427,11 @@ export function activate(context: vscode.ExtensionContext): void {
           enableScripts: true,
           localResourceRoots: [mediaRoot]
         };
+
+        const onDidReceiveMessage = webviewView.webview.onDidReceiveMessage((raw) => {
+          void handleHostBridgeInvoke(raw, webviewView.webview, output);
+        });
+        context.subscriptions.push(onDidReceiveMessage);
 
         try {
           await ensureBridgeStarted(context, output);

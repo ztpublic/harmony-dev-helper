@@ -124,6 +124,15 @@ IntelliJ:
 Optional manifest override:
 - `HARMONY_HDC_BRIDGE_MANIFEST_PATH`
 
+## Dual-channel runtime model
+
+The shared webview now uses two channels:
+
+- Data plane (`hdc.*`): webview -> Rust bridge over WebSocket (existing behavior)
+- Control plane (`ide.*`): webview -> host IDE bridge (VSCode extension / IntelliJ plugin)
+
+Rust remains responsible for HDC features only; IDE-specific actions are handled by the host runtime.
+
 ## Frontend bootstrap contract
 
 Hosts provide one of:
@@ -157,3 +166,34 @@ Supported invoke actions:
 Additional async host events:
 - `hdc.hilog.batch`
 - `hdc.hilog.state`
+
+## IDE host bridge contract (new)
+
+Host bridge envelope shape:
+- `{ channel, id, type, payload }`
+- `channel`: always `harmony-host`
+- `type`: `invoke` | `result` | `error`
+
+Supported invoke actions:
+- `ide.getCapabilities`
+- `ide.openFile`
+
+`ide.getCapabilities` result:
+- `{ capabilities: { "ide.openFile": boolean } }`
+
+`ide.openFile` args:
+- `path: string` (absolute filesystem path, required)
+- `line?: number` (1-based, optional, default `1`)
+- `column?: number` (1-based, optional, default `1`)
+- `preview?: boolean` (optional, host best effort)
+- `preserveFocus?: boolean` (optional, host best effort)
+
+`ide.openFile` result:
+- `{ opened: true }`
+
+Host bridge error codes:
+- `UNSUPPORTED_HOST`
+- `INVALID_ARGS`
+- `FILE_NOT_FOUND`
+- `OPEN_FAILED`
+- `TIMEOUT`

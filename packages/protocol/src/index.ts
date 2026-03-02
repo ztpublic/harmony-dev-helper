@@ -25,6 +25,78 @@ export interface HostCapabilities {
   "hdc.hilog.unsubscribe": boolean;
 }
 
+export interface IdeCapabilities {
+  "ide.openFile": boolean;
+}
+
+export interface IdeOpenFileArgs {
+  path: string;
+  line?: number;
+  column?: number;
+  preview?: boolean;
+  preserveFocus?: boolean;
+}
+
+export type IdeInvokeAction = "ide.getCapabilities" | "ide.openFile";
+
+export interface IdeInvokeArgsByAction {
+  "ide.getCapabilities": Record<string, never>;
+  "ide.openFile": IdeOpenFileArgs;
+}
+
+export interface IdeInvokeResultByAction {
+  "ide.getCapabilities": { capabilities: IdeCapabilities };
+  "ide.openFile": { opened: true };
+}
+
+type IdeInvokePayload = {
+  [A in IdeInvokeAction]: {
+    action: A;
+    args: IdeInvokeArgsByAction[A];
+  };
+}[IdeInvokeAction];
+
+type IdeResultPayload = {
+  [A in IdeInvokeAction]: {
+    action: A;
+    data: IdeInvokeResultByAction[A];
+  };
+}[IdeInvokeAction];
+
+type IdeErrorPayload = {
+  [A in IdeInvokeAction]: {
+    action: A;
+    code: string;
+    message: string;
+  };
+}[IdeInvokeAction];
+
+export type HostBridgeInvokeMessage = {
+  channel: "harmony-host";
+  id: string;
+  type: "invoke";
+  payload: IdeInvokePayload;
+};
+
+export type HostBridgeResultMessage = {
+  channel: "harmony-host";
+  id: string;
+  type: "result";
+  payload: IdeResultPayload;
+};
+
+export type HostBridgeErrorMessage = {
+  channel: "harmony-host";
+  id: string;
+  type: "error";
+  payload: IdeErrorPayload;
+};
+
+export type HostBridgeMessage =
+  | HostBridgeInvokeMessage
+  | HostBridgeResultMessage
+  | HostBridgeErrorMessage;
+
 export type BinConfigSource = "custom" | "path" | "deveco" | "none";
 
 export interface HdcBinConfigResult {
