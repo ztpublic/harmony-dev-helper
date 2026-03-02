@@ -5,7 +5,8 @@ import * as path from "node:path";
 import type {
   HostBridgeErrorMessage,
   HostBridgeInvokeMessage,
-  HostBridgeResultMessage
+  HostBridgeResultMessage,
+  IdeHostInfo
 } from "@harmony/protocol";
 import * as vscode from "vscode";
 
@@ -22,6 +23,7 @@ let bridgeStartup: Promise<void> | undefined;
 
 type HostBridgeAction =
   | "ide.getCapabilities"
+  | "ide.getHostInfo"
   | "ide.openFile"
   | "ide.openPath"
   | "ide.openExternal"
@@ -246,11 +248,80 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 function isHostBridgeAction(value: unknown): value is HostBridgeAction {
   return (
     value === "ide.getCapabilities" ||
+    value === "ide.getHostInfo" ||
     value === "ide.openFile" ||
     value === "ide.openPath" ||
     value === "ide.openExternal" ||
     value === "ide.openChat"
   );
+}
+
+function detectHostIdeInfo(): IdeHostInfo {
+  const uriScheme = vscode.env.uriScheme ?? "";
+  const appName = vscode.env.appName ?? "";
+  const normalizedScheme = uriScheme.trim().toLowerCase();
+  const normalizedAppName = appName.trim().toLowerCase();
+
+  if (normalizedScheme === "cursor") {
+    return {
+      host: "cursor",
+      uriScheme,
+      appName,
+      isOfficialVsCode: false
+    };
+  }
+
+  if (normalizedScheme === "trae") {
+    return {
+      host: "trae",
+      uriScheme,
+      appName,
+      isOfficialVsCode: false
+    };
+  }
+
+  if (normalizedScheme === "vscode" || normalizedScheme === "vscode-insiders") {
+    return {
+      host: "vscode",
+      uriScheme,
+      appName,
+      isOfficialVsCode: normalizedAppName.includes("visual studio code")
+    };
+  }
+
+  if (normalizedAppName.includes("cursor")) {
+    return {
+      host: "cursor",
+      uriScheme,
+      appName,
+      isOfficialVsCode: false
+    };
+  }
+
+  if (normalizedAppName.includes("trae")) {
+    return {
+      host: "trae",
+      uriScheme,
+      appName,
+      isOfficialVsCode: false
+    };
+  }
+
+  if (normalizedAppName.includes("visual studio code")) {
+    return {
+      host: "vscode",
+      uriScheme,
+      appName,
+      isOfficialVsCode: true
+    };
+  }
+
+  return {
+    host: "unknown",
+    uriScheme,
+    appName,
+    isOfficialVsCode: false
+  };
 }
 
 function isHostBridgeInvokeMessage(value: unknown): value is HostBridgeInvokeMessage {
@@ -287,6 +358,20 @@ function createHostBridgeCapabilitiesResult(id: string): HostBridgeResultMessage
           "ide.openExternal": true,
           "ide.openChat": true
         }
+      }
+    }
+  };
+}
+
+function createHostBridgeHostInfoResult(id: string, host: IdeHostInfo): HostBridgeResultMessage {
+  return {
+    channel: HOST_BRIDGE_CHANNEL,
+    id,
+    type: "result",
+    payload: {
+      action: "ide.getHostInfo",
+      data: {
+        host
       }
     }
   };
@@ -628,7 +713,8 @@ async function openChatInIde(args: IdeOpenChatArgs): Promise<boolean> {
 async function handleHostBridgeInvoke(
   raw: unknown,
   webview: vscode.Webview,
-  output: vscode.OutputChannel
+  output: vscode.OutputChannel,
+  hostInfo: IdeHostInfo
 ): Promise<void> {
   if (!isHostBridgeInvokeMessage(raw)) {
     return;
@@ -640,6 +726,12 @@ async function handleHostBridgeInvoke(
   if (action === "ide.getCapabilities") {
     output.appendLine("[host-bridge] ide.getCapabilities");
     await webview.postMessage(createHostBridgeCapabilitiesResult(id));
+    return;
+  }
+
+  if (action === "ide.getHostInfo") {
+    output.appendLine(`[host-bridge] ide.getHostInfo host=${hostInfo.host}`);
+    await webview.postMessage(createHostBridgeHostInfoResult(id, hostInfo));
     return;
   }
 
@@ -730,7 +822,11 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("Harmony");
+  const hostInfo = detectHostIdeInfo();
   const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
+  output.appendLine(
+    `[host] detected ide=${hostInfo.host} scheme=${hostInfo.uriScheme || "unknown"} appName=${hostInfo.appName || "unknown"} officialVsCode=${hostInfo.isOfficialVsCode}`
+  );
 
   const webviewProvider = vscode.window.registerWebviewViewProvider(
     HARMONY_VIEW_ID,
@@ -742,7 +838,7 @@ export function activate(context: vscode.ExtensionContext): void {
         };
 
         const onDidReceiveMessage = webviewView.webview.onDidReceiveMessage((raw) => {
-          void handleHostBridgeInvoke(raw, webviewView.webview, output);
+          void handleHostBridgeInvoke(raw, webviewView.webview, output, hostInfo);
         });
         context.subscriptions.push(onDidReceiveMessage);
 

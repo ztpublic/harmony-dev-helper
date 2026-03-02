@@ -49,6 +49,20 @@ object HarmonyHostBridge {
           )
         )
       }
+      "ide.getHostInfo" -> {
+        buildResultResponse(
+          id = id,
+          action = action,
+          data = JSONObject().put(
+            "host",
+            JSONObject()
+              .put("host", "unknown")
+              .put("uriScheme", "")
+              .put("appName", "IntelliJ IDEA")
+              .put("isOfficialVsCode", false)
+          )
+        )
+      }
       "ide.openFile" -> handleOpenFile(project, id, payload.opt("args"))
       "ide.openPath" -> buildNoopOpenResult(id, action)
       "ide.openExternal" -> buildNoopOpenResult(id, action)
@@ -115,6 +129,7 @@ object HarmonyHostBridge {
   private fun normalizeAction(action: String): String {
     return if (
       action == "ide.getCapabilities" ||
+      action == "ide.getHostInfo" ||
       action == "ide.openFile" ||
       action == "ide.openPath" ||
       action == "ide.openExternal" ||

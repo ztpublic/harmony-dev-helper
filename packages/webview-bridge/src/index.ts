@@ -10,6 +10,7 @@ import {
   type HostBridgeResultMessage,
   type HostMessage,
   type IdeCapabilities,
+  type IdeHostInfo,
   type IdeInvokeAction,
   type IdeInvokeArgsByAction,
   type IdeInvokeResultByAction,
@@ -115,6 +116,7 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 function isIdeInvokeAction(value: unknown): value is IdeInvokeAction {
   return (
     value === "ide.getCapabilities" ||
+    value === "ide.getHostInfo" ||
     value === "ide.openFile" ||
     value === "ide.openPath" ||
     value === "ide.openExternal" ||
@@ -267,6 +269,11 @@ export class HarmonyHostBridgeClient {
   async getCapabilities(options?: InvokeOptions): Promise<IdeCapabilities> {
     const result = await this.invoke("ide.getCapabilities", {}, options);
     return result.capabilities;
+  }
+
+  async getHostInfo(options?: InvokeOptions): Promise<IdeHostInfo> {
+    const result = await this.invoke("ide.getHostInfo", {}, options);
+    return result.host;
   }
 
   dispose(): void {

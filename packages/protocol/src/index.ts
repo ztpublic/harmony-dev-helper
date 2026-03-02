@@ -32,6 +32,15 @@ export interface IdeCapabilities {
   "ide.openChat": boolean;
 }
 
+export type IdeHost = "vscode" | "cursor" | "trae" | "unknown";
+
+export interface IdeHostInfo {
+  host: IdeHost;
+  uriScheme: string;
+  appName: string;
+  isOfficialVsCode: boolean;
+}
+
 export interface IdeOpenFileArgs {
   path: string;
   line?: number;
@@ -59,6 +68,7 @@ export interface IdeOpenChatArgs {
 
 export type IdeInvokeAction =
   | "ide.getCapabilities"
+  | "ide.getHostInfo"
   | "ide.openFile"
   | "ide.openPath"
   | "ide.openExternal"
@@ -66,6 +76,7 @@ export type IdeInvokeAction =
 
 export interface IdeInvokeArgsByAction {
   "ide.getCapabilities": Record<string, never>;
+  "ide.getHostInfo": Record<string, never>;
   "ide.openFile": IdeOpenFileArgs;
   "ide.openPath": IdeOpenPathArgs;
   "ide.openExternal": IdeOpenExternalArgs;
@@ -74,6 +85,7 @@ export interface IdeInvokeArgsByAction {
 
 export interface IdeInvokeResultByAction {
   "ide.getCapabilities": { capabilities: IdeCapabilities };
+  "ide.getHostInfo": { host: IdeHostInfo };
   "ide.openFile": { opened: true };
   "ide.openPath": { opened: boolean };
   "ide.openExternal": { opened: boolean };

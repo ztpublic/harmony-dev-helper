@@ -176,6 +176,7 @@ Host bridge envelope shape:
 
 Supported invoke actions:
 - `ide.getCapabilities`
+- `ide.getHostInfo`
 - `ide.openFile`
 - `ide.openPath`
 - `ide.openExternal`
@@ -183,6 +184,10 @@ Supported invoke actions:
 
 `ide.getCapabilities` result:
 - `{ capabilities: { "ide.openFile": boolean, "ide.openPath": boolean, "ide.openExternal": boolean, "ide.openChat": boolean } }`
+
+`ide.getHostInfo` result:
+- `{ host: { host: "vscode" | "cursor" | "trae" | "unknown", uriScheme: string, appName: string, isOfficialVsCode: boolean } }`
+- VSCode extension uses `vscode.env.uriScheme` as primary detection and `vscode.env.appName` as fallback.
 
 `ide.openFile` args:
 - `path: string` (absolute filesystem path, required)
@@ -221,8 +226,8 @@ Supported invoke actions:
 - Unsupported hosts or open failures return `{ opened: false }`.
 
 Host support (current):
-- VSCode extension: `ide.openFile`, `ide.openPath`, `ide.openExternal`, `ide.openChat` all supported.
-- IntelliJ plugin: `ide.openFile` supported; `ide.openPath`, `ide.openExternal`, and `ide.openChat` are advertised as unsupported (`false`) and return no-op `{ opened: false }` if invoked.
+- VSCode extension: `ide.getHostInfo`, `ide.openFile`, `ide.openPath`, `ide.openExternal`, `ide.openChat` all supported.
+- IntelliJ plugin: `ide.getHostInfo` supported (returns `unknown` host); `ide.openFile` supported; `ide.openPath`, `ide.openExternal`, and `ide.openChat` are advertised as unsupported (`false`) and return no-op `{ opened: false }` if invoked.
 
 Host bridge error codes:
 - `UNSUPPORTED_HOST`
