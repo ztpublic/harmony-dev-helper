@@ -75,6 +75,11 @@ type WrappedLineGroup = {
   combinedText: string;
   segments: WrappedLineSegment[];
 };
+type TerminalContextMenuState = {
+  x: number;
+  y: number;
+  canCopy: boolean;
+};
 
 const MAX_WRITE_BYTES_PER_FRAME = 128 * 1024;
 const SEARCH_DEBOUNCE_MS = 250;
@@ -360,13 +365,63 @@ function isMacPlatform(): boolean {
   return /mac/i.test(navigator.platform);
 }
 
+function hasPrimaryModifier(event: { metaKey: boolean; ctrlKey: boolean }): boolean {
+  return isMacPlatform() ? event.metaKey : event.ctrlKey;
+}
+
+function fallbackCopyText(text: string): boolean {
+  if (typeof document === "undefined" || !document.body) {
+    return false;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+
+  document.body.removeChild(textarea);
+  return copied;
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (!text) {
+    return false;
+  }
+
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // fall through to legacy fallback
+    }
+  }
+
+  return fallbackCopyText(text);
+}
+
 function shouldActivateLink(event: MouseEvent): boolean {
   const primaryClick = event.button === 0 || event.which === 1 || event.buttons === 1;
   if (!primaryClick) {
     return false;
   }
 
-  return isMacPlatform() ? event.metaKey : event.ctrlKey;
+  return hasPrimaryModifier(event);
 }
 
 function isEdgeTrimmableChar(char: string): boolean {
@@ -647,6 +702,7 @@ export function HilogConsolePanel({
   const manualPausedRef = useRef(false);
   const levelFilterRef = useRef<HTMLDivElement>(null);
   const pidFilterRef = useRef<HTMLDivElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
   const pidRefreshRequestIdRef = useRef(0);
 
   const [status, setStatus] = useState<HilogStatus>("idle");
@@ -664,6 +720,7 @@ export function HilogConsolePanel({
   const [isPidLoading, setIsPidLoading] = useState(false);
   const [pidError, setPidError] = useState<string>();
   const [errorMessage, setErrorMessage] = useState<string>();
+  const [terminalContextMenu, setTerminalContextMenu] = useState<TerminalContextMenuState | null>(null);
 
   stickToEndRef.current = stickToEnd;
   manualPausedRef.current = manualPaused;
@@ -806,6 +863,31 @@ export function HilogConsolePanel({
       }
     }
   }, [client, connectionState, hdcAvailable, selectedDevice]);
+
+  const copySelectedTerminalText = useCallback(async () => {
+    const terminal = terminalRef.current;
+    const selection = terminal?.getSelection() ?? "";
+    if (!selection) {
+      return;
+    }
+
+    await copyTextToClipboard(selection);
+  }, []);
+
+  const handleContextMenuCopy = useCallback(() => {
+    void copySelectedTerminalText();
+    setTerminalContextMenu(null);
+  }, [copySelectedTerminalText]);
+
+  const handleContextMenuSelectAll = useCallback(() => {
+    terminalRef.current?.selectAll();
+    setTerminalContextMenu(null);
+  }, []);
+
+  const handleContextMenuClear = useCallback(() => {
+    clearHistoryAndVisible();
+    setTerminalContextMenu(null);
+  }, [clearHistoryAndVisible]);
 
   const scheduleFlush = useCallback(() => {
     if (rafIdRef.current !== null) {
@@ -1023,6 +1105,29 @@ export function HilogConsolePanel({
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(container);
+    const openTerminalContextMenu = (event: MouseEvent) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setTerminalContextMenu({
+        x: event.clientX,
+        y: event.clientY,
+        canCopy: terminal.hasSelection()
+      });
+    };
+    const onTerminalMouseDown = (event: MouseEvent) => {
+      if (event.button !== 2) {
+        return;
+      }
+
+      openTerminalContextMenu(event);
+    };
+    const onTerminalContextMenu = (event: MouseEvent) => {
+      openTerminalContextMenu(event);
+    };
+
+    container.addEventListener("mousedown", onTerminalMouseDown, true);
+    container.addEventListener("contextmenu", onTerminalContextMenu, true);
+
     const linkProviderDisposable = terminal.registerLinkProvider({
       provideLinks: (bufferLineNumber, callback) => {
         const bufferLineIndex = bufferLineNumber - 1;
@@ -1125,6 +1230,8 @@ export function HilogConsolePanel({
 
       linkProviderDisposable.dispose();
       scrollDisposable.dispose();
+      container.removeEventListener("mousedown", onTerminalMouseDown, true);
+      container.removeEventListener("contextmenu", onTerminalContextMenu, true);
       observer?.disconnect();
       window.removeEventListener("resize", fit);
       terminal.dispose();
@@ -1222,6 +1329,91 @@ export function HilogConsolePanel({
       document.removeEventListener("keydown", onKeyDown);
     };
   }, [isLevelDropdownOpen, isPidDropdownOpen]);
+
+  useEffect(() => {
+    if (!terminalContextMenu) {
+      return;
+    }
+
+    const menuElement = contextMenuRef.current;
+    if (!menuElement) {
+      return;
+    }
+
+    const bounds = menuElement.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const margin = 8;
+    let nextX = terminalContextMenu.x;
+    let nextY = terminalContextMenu.y;
+
+    if (nextX + bounds.width + margin > viewportWidth) {
+      nextX = Math.max(margin, viewportWidth - bounds.width - margin);
+    }
+
+    if (nextY + bounds.height + margin > viewportHeight) {
+      nextY = Math.max(margin, viewportHeight - bounds.height - margin);
+    }
+
+    if (nextX === terminalContextMenu.x && nextY === terminalContextMenu.y) {
+      return;
+    }
+
+    setTerminalContextMenu((current) => {
+      if (!current) {
+        return current;
+      }
+
+      if (current.x === nextX && current.y === nextY) {
+        return current;
+      }
+
+      return {
+        ...current,
+        x: nextX,
+        y: nextY
+      };
+    });
+  }, [terminalContextMenu]);
+
+  useEffect(() => {
+    if (!terminalContextMenu) {
+      return;
+    }
+
+    const closeContextMenu = () => {
+      setTerminalContextMenu(null);
+    };
+
+    const onMouseDown = (event: MouseEvent) => {
+      if (event.button === 2) {
+        return;
+      }
+
+      const target = event.target as Node | null;
+      if (!target || contextMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      closeContextMenu();
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeContextMenu();
+      }
+    };
+
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", closeContextMenu);
+
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", closeContextMenu);
+    };
+  }, [terminalContextMenu]);
 
   useEffect(() => {
     if (!client) {
@@ -1660,6 +1852,44 @@ export function HilogConsolePanel({
       <div className="hilog-terminal-frame">
         <div ref={terminalContainerRef} className="hilog-terminal" />
       </div>
+
+      {terminalContextMenu ? (
+        <div
+          ref={contextMenuRef}
+          className="hilog-context-menu"
+          role="menu"
+          style={{
+            left: `${terminalContextMenu.x}px`,
+            top: `${terminalContextMenu.y}px`
+          }}
+        >
+          <button
+            type="button"
+            className="hilog-context-menu-item"
+            role="menuitem"
+            disabled={!terminalContextMenu.canCopy}
+            onClick={handleContextMenuCopy}
+          >
+            Copy
+          </button>
+          <button
+            type="button"
+            className="hilog-context-menu-item"
+            role="menuitem"
+            onClick={handleContextMenuSelectAll}
+          >
+            Select all
+          </button>
+          <button
+            type="button"
+            className="hilog-context-menu-item"
+            role="menuitem"
+            onClick={handleContextMenuClear}
+          >
+            Clear console
+          </button>
+        </div>
+      ) : null}
     </section>
   );
 }
