@@ -44,9 +44,11 @@
   --success-border: rgba(46, 160, 67, 0.35);
 
   --terminal-frame-bg: #1f1f1f;
-  --control-height: 30px;
-  --control-radius: 4px;
-  --control-padding-x: 0.7rem;
+  --control-scale: 0.8;
+  --control-font-scale: 0.95;
+  --control-height: calc(30px * var(--control-scale));
+  --control-radius: calc(4px * var(--control-scale));
+  --control-padding-x: calc(0.7rem * var(--control-scale));
 
   color: var(--text-primary);
   background: var(--bg-app);
@@ -183,7 +185,7 @@ body {
   border-radius: var(--control-radius) var(--control-radius) 0 0;
   background: var(--surface-tab);
   color: var(--text-muted);
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--control-font-scale));
   font-weight: 600;
   height: var(--control-height);
   padding: 0 var(--control-padding-x);
@@ -224,14 +226,18 @@ body {
 }
 
 .hdc-device-combobox {
-  width: clamp(220px, 28vw, 320px);
+  width: clamp(
+    calc(220px * var(--control-scale)),
+    calc(28vw * var(--control-scale)),
+    calc(320px * var(--control-scale))
+  );
   max-width: min(100%, calc(100vw - 1.5rem));
   height: var(--control-height);
   border-radius: var(--control-radius);
   border: 1px solid var(--border-default);
   background: var(--surface-control);
   padding: 0 var(--control-padding-x);
-  font-size: 0.95rem;
+  font-size: calc(0.95rem * var(--control-scale));
   color: var(--text-primary);
 }
 
@@ -253,8 +259,8 @@ body {
 }
 
 .settings-icon-button svg {
-  width: 18px;
-  height: 18px;
+  width: calc(18px * var(--control-scale));
+  height: calc(18px * var(--control-scale));
   fill: var(--text-secondary);
 }
 
@@ -319,6 +325,7 @@ body {
   color: var(--text-primary);
   height: var(--control-height);
   padding: 0 var(--control-padding-x);
+  font-size: calc(0.85rem * var(--control-font-scale));
   cursor: pointer;
 }
 
@@ -354,8 +361,8 @@ body {
   border-radius: 8px;
   background: var(--surface-control);
   color: var(--text-secondary);
-  padding: 0.35rem 0.55rem;
-  font-size: 0.85rem;
+  padding: calc(0.35rem * var(--control-scale)) calc(0.55rem * var(--control-scale));
+  font-size: calc(0.85rem * var(--control-font-scale));
   line-height: 1;
 }
 
@@ -376,7 +383,7 @@ body {
   color: var(--text-primary);
   height: var(--control-height);
   padding: 0 var(--control-padding-x);
-  font-size: 0.92rem;
+  font-size: calc(0.92rem * var(--control-font-scale));
 }
 
 .settings-input:disabled {
@@ -398,7 +405,7 @@ body {
   color: var(--text-primary);
   height: var(--control-height);
   padding: 0 var(--control-padding-x);
-  font-size: 0.85rem;
+  font-size: calc(0.85rem * var(--control-font-scale));
   cursor: pointer;
 }
 
@@ -511,7 +518,7 @@ body {
   color: var(--text-primary);
   height: var(--control-height);
   padding: 0 var(--control-padding-x);
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--control-font-scale));
   cursor: pointer;
 }
 
@@ -545,9 +552,9 @@ body {
   color: var(--text-primary);
   height: var(--control-height);
   padding: 0 var(--control-padding-x);
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--control-font-scale));
   cursor: pointer;
-  min-width: 126px;
+  min-width: calc(126px * var(--control-scale));
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
@@ -560,15 +567,15 @@ body {
 
 .hilog-level-trigger-caret {
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--control-font-scale));
 }
 
 .hilog-level-menu {
   position: absolute;
   top: calc(100% + 0.36rem);
   left: 0;
-  min-width: 150px;
-  padding: 0.35rem;
+  min-width: calc(150px * var(--control-scale));
+  padding: calc(0.35rem * var(--control-scale));
   border: 1px solid var(--border-default);
   border-radius: 10px;
   background: var(--surface-panel);
@@ -581,10 +588,10 @@ body {
 .hilog-level-option {
   display: inline-flex;
   align-items: center;
-  gap: 0.42rem;
+  gap: calc(0.42rem * var(--control-scale));
   border-radius: 6px;
-  padding: 0.2rem 0.35rem;
-  font-size: 0.8rem;
+  padding: calc(0.2rem * var(--control-scale)) calc(0.35rem * var(--control-scale));
+  font-size: calc(0.8rem * var(--control-font-scale));
   color: var(--text-primary);
 }
 
@@ -611,14 +618,14 @@ body {
   color: var(--text-primary);
   height: var(--control-height);
   padding: 0 var(--control-padding-x);
-  font-size: 0.8rem;
+  font-size: calc(0.8rem * var(--control-font-scale));
   cursor: pointer;
-  min-width: 126px;
+  min-width: calc(126px * var(--control-scale));
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
   gap: 0.45rem;
-  max-width: 340px;
+  max-width: calc(340px * var(--control-scale));
 }
 
 .hilog-pid-trigger:hover {
@@ -632,7 +639,7 @@ body {
 
 .hilog-pid-trigger-caret {
   color: var(--text-muted);
-  font-size: 0.72rem;
+  font-size: calc(0.72rem * var(--control-font-scale));
   flex: 0 0 auto;
 }
 
@@ -647,11 +654,11 @@ body {
   position: absolute;
   top: calc(100% + 0.36rem);
   left: 0;
-  min-width: 240px;
-  max-width: 380px;
-  max-height: 280px;
+  min-width: calc(240px * var(--control-scale));
+  max-width: calc(380px * var(--control-scale));
+  max-height: calc(280px * var(--control-scale));
   overflow: auto;
-  padding: 0.35rem;
+  padding: calc(0.35rem * var(--control-scale));
   border: 1px solid var(--border-default);
   border-radius: 10px;
   background: var(--surface-panel);
@@ -668,7 +675,7 @@ body {
   border-radius: var(--control-radius);
   height: var(--control-height);
   padding: 0 var(--control-padding-x);
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-font-scale));
   text-align: left;
   cursor: pointer;
   white-space: nowrap;
@@ -695,8 +702,8 @@ body {
   color: var(--text-primary);
   height: var(--control-height);
   padding: 0 var(--control-padding-x);
-  font-size: 0.8rem;
-  min-width: 180px;
+  font-size: calc(0.8rem * var(--control-font-scale));
+  min-width: calc(180px * var(--control-scale));
 }
 
 .hilog-search-input::placeholder {
@@ -716,7 +723,7 @@ body {
   color: var(--text-secondary);
   height: var(--control-height);
   padding: 0 var(--control-padding-x);
-  font-size: 0.75rem;
+  font-size: calc(0.75rem * var(--control-font-scale));
   cursor: pointer;
   line-height: 1;
 }
@@ -773,9 +780,9 @@ body {
   border-radius: 6px;
   background: transparent;
   color: var(--text-primary);
-  padding: 0.35rem 0.55rem;
+  padding: calc(0.35rem * var(--control-scale)) calc(0.55rem * var(--control-scale));
   text-align: left;
-  font-size: 0.78rem;
+  font-size: calc(0.78rem * var(--control-font-scale));
   cursor: pointer;
 }
 
@@ -791,18 +798,18 @@ body {
 @media (max-width: 700px) {
   .hilog-level-trigger,
   .hilog-pid-trigger {
-    min-width: 110px;
-    max-width: min(72vw, 300px);
+    min-width: calc(110px * var(--control-scale));
+    max-width: min(calc(72vw * var(--control-scale)), calc(300px * var(--control-scale)));
   }
 
   .hilog-pid-menu {
-    min-width: 200px;
-    max-width: min(88vw, 320px);
+    min-width: calc(200px * var(--control-scale));
+    max-width: min(calc(88vw * var(--control-scale)), calc(320px * var(--control-scale)));
   }
 
   .hilog-search-input {
-    min-width: 140px;
-    width: min(52vw, 240px);
+    min-width: calc(140px * var(--control-scale));
+    width: min(calc(52vw * var(--control-scale)), calc(240px * var(--control-scale)));
   }
 
   .hilog-terminal-frame {
@@ -882,15 +889,15 @@ header,
 }
 
 .device-input-row select {
-  min-width: 240px;
-  flex: 1 1 260px;
+  min-width: calc(240px * var(--control-scale));
+  flex: 1 1 calc(260px * var(--control-scale));
   height: var(--control-height);
   border-radius: var(--control-radius);
   border: 1px solid var(--border-default);
   background: var(--surface-control);
   color: var(--text-primary);
   padding: 0 var(--control-padding-x);
-  font-size: 0.95rem;
+  font-size: calc(0.95rem * var(--control-scale));
 }
 
 .device-input-row select:disabled {
@@ -906,6 +913,7 @@ header,
   font-weight: 600;
   height: var(--control-height);
   padding: 0 var(--control-padding-x);
+  font-size: calc(0.85rem * var(--control-font-scale));
   cursor: pointer;
 }
 
