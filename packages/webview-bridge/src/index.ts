@@ -113,7 +113,12 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isIdeInvokeAction(value: unknown): value is IdeInvokeAction {
-  return value === "ide.getCapabilities" || value === "ide.openFile";
+  return (
+    value === "ide.getCapabilities" ||
+    value === "ide.openFile" ||
+    value === "ide.openPath" ||
+    value === "ide.openExternal"
+  );
 }
 
 function isHostBridgeMessage(value: unknown): value is HostBridgeMessage {
@@ -192,6 +197,7 @@ export class HarmonyHostBridgeClient {
   private readonly windowLike: WindowLike;
   private readonly pendingInvokes = new Map<string, PendingHostInvoke>();
   private isVsCodeMessageListenerAttached = false;
+  private vsCodeApi: VsCodeWebviewApi | null | undefined;
 
   private readonly onVsCodeMessage = (event: MessageEvent<unknown>): void => {
     const message = event.data;
@@ -283,7 +289,7 @@ export class HarmonyHostBridgeClient {
     args: IdeInvokeArgsByAction[TAction],
     timeoutMs: number
   ): Promise<IdeInvokeResultByAction[TAction]> {
-    const api = this.windowLike.acquireVsCodeApi?.();
+    const api = this.getVsCodeApi();
     if (!api || typeof api.postMessage !== "function") {
       return Promise.reject(
         toHostBridgeError("UNSUPPORTED_HOST", "VSCode webview API is unavailable")
@@ -309,9 +315,9 @@ export class HarmonyHostBridgeClient {
         timeoutHandle
       });
 
-      let posted = false;
+      let postResult: unknown;
       try {
-        posted = Boolean(api.postMessage(message));
+        postResult = api.postMessage(message);
       } catch (error) {
         clearTimeout(timeoutHandle);
         this.pendingInvokes.delete(message.id);
@@ -319,7 +325,8 @@ export class HarmonyHostBridgeClient {
         return;
       }
 
-      if (!posted) {
+      // In VSCode webviews, postMessage often returns void. Treat only an explicit false as rejection.
+      if (postResult === false) {
         clearTimeout(timeoutHandle);
         this.pendingInvokes.delete(message.id);
         reject(
@@ -327,6 +334,21 @@ export class HarmonyHostBridgeClient {
         );
       }
     });
+  }
+
+  private getVsCodeApi(): VsCodeWebviewApi | null {
+    if (this.vsCodeApi !== undefined) {
+      return this.vsCodeApi;
+    }
+
+    try {
+      const api = this.windowLike.acquireVsCodeApi?.();
+      this.vsCodeApi = api && typeof api.postMessage === "function" ? api : null;
+    } catch {
+      this.vsCodeApi = null;
+    }
+
+    return this.vsCodeApi;
   }
 
   private invokeViaIntelliJ<TAction extends IdeInvokeAction>(

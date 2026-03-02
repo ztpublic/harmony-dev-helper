@@ -41,11 +41,16 @@ object HarmonyHostBridge {
           action = action,
           data = JSONObject().put(
             "capabilities",
-            JSONObject().put("ide.openFile", true)
+            JSONObject()
+              .put("ide.openFile", true)
+              .put("ide.openPath", false)
+              .put("ide.openExternal", false)
           )
         )
       }
       "ide.openFile" -> handleOpenFile(project, id, payload.opt("args"))
+      "ide.openPath" -> buildNoopOpenResult(id, action)
+      "ide.openExternal" -> buildNoopOpenResult(id, action)
       else -> buildErrorResponse(id, "ide.openFile", "INVALID_ARGS", "Unsupported host bridge action: $action")
     }
   }
@@ -106,11 +111,24 @@ object HarmonyHostBridge {
   }
 
   private fun normalizeAction(action: String): String {
-    return if (action == "ide.getCapabilities" || action == "ide.openFile") {
+    return if (
+      action == "ide.getCapabilities" ||
+      action == "ide.openFile" ||
+      action == "ide.openPath" ||
+      action == "ide.openExternal"
+    ) {
       action
     } else {
       "ide.openFile"
     }
+  }
+
+  private fun buildNoopOpenResult(id: String, action: String): String {
+    return buildResultResponse(
+      id = id,
+      action = action,
+      data = JSONObject().put("opened", false)
+    )
   }
 
   private fun buildResultResponse(id: String, action: String, data: JSONObject): String {

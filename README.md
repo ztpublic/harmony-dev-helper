@@ -177,9 +177,11 @@ Host bridge envelope shape:
 Supported invoke actions:
 - `ide.getCapabilities`
 - `ide.openFile`
+- `ide.openPath`
+- `ide.openExternal`
 
 `ide.getCapabilities` result:
-- `{ capabilities: { "ide.openFile": boolean } }`
+- `{ capabilities: { "ide.openFile": boolean, "ide.openPath": boolean, "ide.openExternal": boolean } }`
 
 `ide.openFile` args:
 - `path: string` (absolute filesystem path, required)
@@ -190,6 +192,28 @@ Supported invoke actions:
 
 `ide.openFile` result:
 - `{ opened: true }`
+
+`ide.openPath` args:
+- `path: string` (absolute or relative filesystem path, required)
+- `line?: number` (1-based, optional)
+- `column?: number` (1-based, optional)
+- `preview?: boolean` (optional, host best effort for file opens)
+- `preserveFocus?: boolean` (optional, host best effort for file opens)
+
+`ide.openPath` result:
+- `{ opened: boolean }`
+- Open failures (unresolvable path, missing file, unsupported directory target) return `{ opened: false }` without raising host bridge errors.
+
+`ide.openExternal` args:
+- `url: string` (required, must be `http`/`https`)
+
+`ide.openExternal` result:
+- `{ opened: boolean }`
+- Invalid URLs or external-open failures return `{ opened: false }` without raising host bridge errors.
+
+Host support (current):
+- VSCode extension: `ide.openFile`, `ide.openPath`, `ide.openExternal` all supported.
+- IntelliJ plugin: `ide.openFile` supported; `ide.openPath` and `ide.openExternal` are advertised as unsupported (`false`) and return no-op `{ opened: false }` if invoked.
 
 Host bridge error codes:
 - `UNSUPPORTED_HOST`

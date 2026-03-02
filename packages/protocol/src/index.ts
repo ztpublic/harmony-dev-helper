@@ -27,6 +27,8 @@ export interface HostCapabilities {
 
 export interface IdeCapabilities {
   "ide.openFile": boolean;
+  "ide.openPath": boolean;
+  "ide.openExternal": boolean;
 }
 
 export interface IdeOpenFileArgs {
@@ -37,16 +39,36 @@ export interface IdeOpenFileArgs {
   preserveFocus?: boolean;
 }
 
-export type IdeInvokeAction = "ide.getCapabilities" | "ide.openFile";
+export interface IdeOpenPathArgs {
+  path: string;
+  line?: number;
+  column?: number;
+  preview?: boolean;
+  preserveFocus?: boolean;
+}
+
+export interface IdeOpenExternalArgs {
+  url: string;
+}
+
+export type IdeInvokeAction =
+  | "ide.getCapabilities"
+  | "ide.openFile"
+  | "ide.openPath"
+  | "ide.openExternal";
 
 export interface IdeInvokeArgsByAction {
   "ide.getCapabilities": Record<string, never>;
   "ide.openFile": IdeOpenFileArgs;
+  "ide.openPath": IdeOpenPathArgs;
+  "ide.openExternal": IdeOpenExternalArgs;
 }
 
 export interface IdeInvokeResultByAction {
   "ide.getCapabilities": { capabilities: IdeCapabilities };
   "ide.openFile": { opened: true };
+  "ide.openPath": { opened: boolean };
+  "ide.openExternal": { opened: boolean };
 }
 
 type IdeInvokePayload = {

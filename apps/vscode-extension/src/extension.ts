@@ -20,7 +20,11 @@ const HOST_BRIDGE_CHANNEL = "harmony-host";
 let bridgeProcess: ChildProcess | undefined;
 let bridgeStartup: Promise<void> | undefined;
 
-type HostBridgeAction = "ide.getCapabilities" | "ide.openFile";
+type HostBridgeAction =
+  | "ide.getCapabilities"
+  | "ide.openFile"
+  | "ide.openPath"
+  | "ide.openExternal";
 type HostBridgeErrorCode =
   | "UNSUPPORTED_HOST"
   | "INVALID_ARGS"
@@ -34,6 +38,18 @@ interface IdeOpenFileArgs {
   column?: number;
   preview?: boolean;
   preserveFocus?: boolean;
+}
+
+interface IdeOpenPathArgs {
+  path: string;
+  line?: number;
+  column?: number;
+  preview?: boolean;
+  preserveFocus?: boolean;
+}
+
+interface IdeOpenExternalArgs {
+  url: string;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -222,7 +238,12 @@ function isObjectRecord(value: unknown): value is Record<string, unknown> {
 }
 
 function isHostBridgeAction(value: unknown): value is HostBridgeAction {
-  return value === "ide.getCapabilities" || value === "ide.openFile";
+  return (
+    value === "ide.getCapabilities" ||
+    value === "ide.openFile" ||
+    value === "ide.openPath" ||
+    value === "ide.openExternal"
+  );
 }
 
 function isHostBridgeInvokeMessage(value: unknown): value is HostBridgeInvokeMessage {
@@ -254,7 +275,9 @@ function createHostBridgeCapabilitiesResult(id: string): HostBridgeResultMessage
       action: "ide.getCapabilities",
       data: {
         capabilities: {
-          "ide.openFile": true
+          "ide.openFile": true,
+          "ide.openPath": true,
+          "ide.openExternal": true
         }
       }
     }
@@ -270,6 +293,34 @@ function createHostBridgeOpenFileResult(id: string): HostBridgeResultMessage {
       action: "ide.openFile",
       data: {
         opened: true
+      }
+    }
+  };
+}
+
+function createHostBridgeOpenPathResult(id: string, opened: boolean): HostBridgeResultMessage {
+  return {
+    channel: HOST_BRIDGE_CHANNEL,
+    id,
+    type: "result",
+    payload: {
+      action: "ide.openPath",
+      data: {
+        opened
+      }
+    }
+  };
+}
+
+function createHostBridgeOpenExternalResult(id: string, opened: boolean): HostBridgeResultMessage {
+  return {
+    channel: HOST_BRIDGE_CHANNEL,
+    id,
+    type: "result",
+    payload: {
+      action: "ide.openExternal",
+      data: {
+        opened
       }
     }
   };
@@ -293,6 +344,30 @@ function createHostBridgeError(
   };
 }
 
+function parsePositiveInteger(value: unknown, fieldName: string): number | string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "number" || !Number.isInteger(value) || value <= 0) {
+    return `\`${fieldName}\` must be a positive integer when provided`;
+  }
+
+  return value;
+}
+
+function parseOptionalBoolean(value: unknown, fieldName: string): boolean | string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (typeof value !== "boolean") {
+    return `\`${fieldName}\` must be a boolean when provided`;
+  }
+
+  return value;
+}
+
 function parseOpenFileArgs(args: unknown): IdeOpenFileArgs | string {
   if (!isObjectRecord(args)) {
     return "`args` must be an object";
@@ -307,32 +382,86 @@ function parseOpenFileArgs(args: unknown): IdeOpenFileArgs | string {
     return "`path` must be an absolute filesystem path";
   }
 
-  const line = args.line;
-  if (line !== undefined && (typeof line !== "number" || !Number.isInteger(line) || line <= 0)) {
-    return "`line` must be a positive integer when provided";
+  const line = parsePositiveInteger(args.line, "line");
+  if (typeof line === "string") {
+    return line;
   }
 
-  const column = args.column;
-  if (column !== undefined && (typeof column !== "number" || !Number.isInteger(column) || column <= 0)) {
-    return "`column` must be a positive integer when provided";
+  const column = parsePositiveInteger(args.column, "column");
+  if (typeof column === "string") {
+    return column;
   }
 
-  const preview = args.preview;
-  if (preview !== undefined && typeof preview !== "boolean") {
-    return "`preview` must be a boolean when provided";
+  const preview = parseOptionalBoolean(args.preview, "preview");
+  if (typeof preview === "string") {
+    return preview;
   }
 
-  const preserveFocus = args.preserveFocus;
-  if (preserveFocus !== undefined && typeof preserveFocus !== "boolean") {
-    return "`preserveFocus` must be a boolean when provided";
+  const preserveFocus = parseOptionalBoolean(args.preserveFocus, "preserveFocus");
+  if (typeof preserveFocus === "string") {
+    return preserveFocus;
   }
 
   return {
     path: filePath,
-    line: line as number | undefined,
-    column: column as number | undefined,
+    line,
+    column,
     preview,
     preserveFocus
+  };
+}
+
+function parseOpenPathArgs(args: unknown): IdeOpenPathArgs | string {
+  if (!isObjectRecord(args)) {
+    return "`args` must be an object";
+  }
+
+  const targetPath = args.path;
+  if (typeof targetPath !== "string" || targetPath.trim().length === 0) {
+    return "`path` must be a non-empty string";
+  }
+
+  const line = parsePositiveInteger(args.line, "line");
+  if (typeof line === "string") {
+    return line;
+  }
+
+  const column = parsePositiveInteger(args.column, "column");
+  if (typeof column === "string") {
+    return column;
+  }
+
+  const preview = parseOptionalBoolean(args.preview, "preview");
+  if (typeof preview === "string") {
+    return preview;
+  }
+
+  const preserveFocus = parseOptionalBoolean(args.preserveFocus, "preserveFocus");
+  if (typeof preserveFocus === "string") {
+    return preserveFocus;
+  }
+
+  return {
+    path: targetPath.trim(),
+    line,
+    column,
+    preview,
+    preserveFocus
+  };
+}
+
+function parseOpenExternalArgs(args: unknown): IdeOpenExternalArgs | string {
+  if (!isObjectRecord(args)) {
+    return "`args` must be an object";
+  }
+
+  const url = args.url;
+  if (typeof url !== "string" || url.trim().length === 0) {
+    return "`url` must be a non-empty string";
+  }
+
+  return {
+    url: url.trim()
   };
 }
 
@@ -356,6 +485,91 @@ async function openFileInEditor(args: IdeOpenFileArgs): Promise<void> {
   });
 }
 
+function resolvePathAgainstWorkspace(rawPath: string): string | undefined {
+  const trimmedPath = rawPath.trim();
+  if (!trimmedPath) {
+    return undefined;
+  }
+
+  if (path.isAbsolute(trimmedPath)) {
+    return fs.existsSync(trimmedPath) ? trimmedPath : undefined;
+  }
+
+  const workspaceFolders = vscode.workspace.workspaceFolders ?? [];
+  for (const folder of workspaceFolders) {
+    const candidate = path.resolve(folder.uri.fsPath, trimmedPath);
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return undefined;
+}
+
+async function openPathInIde(args: IdeOpenPathArgs): Promise<boolean> {
+  const resolvedPath = resolvePathAgainstWorkspace(args.path);
+  if (!resolvedPath) {
+    return false;
+  }
+
+  let stats: fs.Stats;
+  try {
+    stats = fs.statSync(resolvedPath);
+  } catch {
+    return false;
+  }
+
+  if (stats.isFile()) {
+    try {
+      await openFileInEditor({
+        path: resolvedPath,
+        line: args.line,
+        column: args.column,
+        preview: args.preview,
+        preserveFocus: args.preserveFocus
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  if (stats.isDirectory()) {
+    const directoryUri = vscode.Uri.file(resolvedPath);
+    if (!vscode.workspace.getWorkspaceFolder(directoryUri)) {
+      return false;
+    }
+
+    try {
+      await vscode.commands.executeCommand("revealInExplorer", directoryUri);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  return false;
+}
+
+async function openExternalUrl(args: IdeOpenExternalArgs): Promise<boolean> {
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(args.url);
+  } catch {
+    return false;
+  }
+
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    return false;
+  }
+
+  try {
+    return Boolean(await vscode.env.openExternal(vscode.Uri.parse(parsedUrl.toString())));
+  } catch {
+    return false;
+  }
+}
+
 async function handleHostBridgeInvoke(
   raw: unknown,
   webview: vscode.Webview,
@@ -369,25 +583,55 @@ async function handleHostBridgeInvoke(
   const { action } = payload;
 
   if (action === "ide.getCapabilities") {
+    output.appendLine("[host-bridge] ide.getCapabilities");
     await webview.postMessage(createHostBridgeCapabilitiesResult(id));
     return;
   }
 
-  const parsedArgs = parseOpenFileArgs(payload.args);
+  if (action === "ide.openFile") {
+    const parsedArgs = parseOpenFileArgs(payload.args);
+    if (typeof parsedArgs === "string") {
+      await webview.postMessage(createHostBridgeError(id, action, "INVALID_ARGS", parsedArgs));
+      return;
+    }
+
+    try {
+      await openFileInEditor(parsedArgs);
+      await webview.postMessage(createHostBridgeOpenFileResult(id));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      const code: HostBridgeErrorCode = message === "FILE_NOT_FOUND" ? "FILE_NOT_FOUND" : "OPEN_FAILED";
+      output.appendLine(`[host-bridge:${code}] ${message}`);
+      await webview.postMessage(createHostBridgeError(id, action, code, message));
+    }
+
+    return;
+  }
+
+  if (action === "ide.openPath") {
+    const parsedArgs = parseOpenPathArgs(payload.args);
+    if (typeof parsedArgs === "string") {
+      await webview.postMessage(createHostBridgeError(id, action, "INVALID_ARGS", parsedArgs));
+      return;
+    }
+
+    output.appendLine(`[host-bridge] ide.openPath path=${parsedArgs.path}`);
+    const opened = await openPathInIde(parsedArgs);
+    output.appendLine(`[host-bridge] ide.openPath opened=${opened}`);
+    await webview.postMessage(createHostBridgeOpenPathResult(id, opened));
+    return;
+  }
+
+  const parsedArgs = parseOpenExternalArgs(payload.args);
   if (typeof parsedArgs === "string") {
     await webview.postMessage(createHostBridgeError(id, action, "INVALID_ARGS", parsedArgs));
     return;
   }
 
-  try {
-    await openFileInEditor(parsedArgs);
-    await webview.postMessage(createHostBridgeOpenFileResult(id));
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const code: HostBridgeErrorCode = message === "FILE_NOT_FOUND" ? "FILE_NOT_FOUND" : "OPEN_FAILED";
-    output.appendLine(`[host-bridge:${code}] ${message}`);
-    await webview.postMessage(createHostBridgeError(id, action, code, message));
-  }
+  output.appendLine(`[host-bridge] ide.openExternal url=${parsedArgs.url}`);
+  const opened = await openExternalUrl(parsedArgs);
+  output.appendLine(`[host-bridge] ide.openExternal opened=${opened}`);
+  await webview.postMessage(createHostBridgeOpenExternalResult(id, opened));
 }
 
 function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): string {

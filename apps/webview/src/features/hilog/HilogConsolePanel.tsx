@@ -2,13 +2,20 @@ import type {
   HdcHilogBatchEventData,
   HdcHilogPidOption,
   HdcHilogStateEventData,
-  HostMessage
+  HostMessage,
+  IdeCapabilities
 } from "@harmony/protocol";
-import type { ConnectionState, HarmonyWebSocketClient } from "@harmony/webview-bridge";
+import {
+  createHostBridgeClient,
+  resolveBootstrap,
+  type ConnectionState,
+  type HarmonyHostBridgeClient,
+  type HarmonyWebSocketClient
+} from "@harmony/webview-bridge";
 import { FitAddon } from "@xterm/addon-fit";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AppTheme } from "../settings/appSettings";
-import { Terminal } from "xterm";
+import { Terminal, type ILink } from "xterm";
 import "xterm/css/xterm.css";
 
 interface HilogConsolePanelProps {
@@ -41,11 +48,43 @@ type HighlightPalette = {
   open: string;
   close: string;
 };
+type OpenableLinkTarget =
+  | {
+      kind: "url";
+      url: string;
+    }
+  | {
+      kind: "path";
+      path: string;
+      line?: number;
+      column?: number;
+    };
+type DetectedOpenableLink = {
+  startOffset: number;
+  endOffsetExclusive: number;
+  text: string;
+  target: OpenableLinkTarget;
+};
+type WrappedLineSegment = {
+  bufferLineIndex: number;
+  text: string;
+  startOffset: number;
+  endOffset: number;
+};
+type WrappedLineGroup = {
+  combinedText: string;
+  segments: WrappedLineSegment[];
+};
 
 const MAX_WRITE_BYTES_PER_FRAME = 128 * 1024;
 const SEARCH_DEBOUNCE_MS = 250;
 const PID_TRIGGER_MAX_LABEL_CHARS = 36;
 const ANSI_SEQUENCE_REGEX = /\x1b\[[0-9;]*m/g;
+const LINK_TOKEN_REGEX = /\S+/g;
+const HTTP_LINK_IN_TOKEN_REGEX = /https?:\/\/[^\s]+/gi;
+const LINK_PATH_WITH_LOCATION_SUFFIX_REGEX = /^(.*):(\d+)(?::(\d+))?$/;
+const WINDOWS_ABSOLUTE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
+const EDGE_TRIMMABLE_CHARS = "'\"()[]{}<>,;";
 const DARK_HIGHLIGHT_PALETTE: HighlightPalette = {
   open: "\x1b[48;2;102;77;0m",
   close: "\x1b[49m"
@@ -313,6 +352,243 @@ function toErrorMessage(error: unknown): string {
   return String(error);
 }
 
+function isMacPlatform(): boolean {
+  if (typeof navigator === "undefined") {
+    return false;
+  }
+
+  return /mac/i.test(navigator.platform);
+}
+
+function shouldActivateLink(event: MouseEvent): boolean {
+  const primaryClick = event.button === 0 || event.which === 1 || event.buttons === 1;
+  if (!primaryClick) {
+    return false;
+  }
+
+  return isMacPlatform() ? event.metaKey : event.ctrlKey;
+}
+
+function isEdgeTrimmableChar(char: string): boolean {
+  return EDGE_TRIMMABLE_CHARS.includes(char);
+}
+
+function trimTokenEdges(token: string): { trimmed: string; startOffset: number; endOffset: number } {
+  let start = 0;
+  let end = token.length;
+
+  while (start < end && isEdgeTrimmableChar(token.charAt(start))) {
+    start += 1;
+  }
+
+  while (end > start && isEdgeTrimmableChar(token.charAt(end - 1))) {
+    end -= 1;
+  }
+
+  return {
+    trimmed: token.slice(start, end),
+    startOffset: start,
+    endOffset: token.length - end
+  };
+}
+
+function parseHttpUrl(candidate: string): string | undefined {
+  try {
+    const parsed = new URL(candidate);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return parsed.toString();
+    }
+  } catch {
+    // invalid URL
+  }
+
+  return undefined;
+}
+
+function looksLikePathCandidate(candidate: string): boolean {
+  return (
+    candidate.startsWith("/") ||
+    candidate.startsWith("./") ||
+    candidate.startsWith("../") ||
+    candidate.startsWith("~/") ||
+    WINDOWS_ABSOLUTE_PATH_REGEX.test(candidate) ||
+    candidate.includes("/") ||
+    candidate.includes("\\")
+  );
+}
+
+function splitPathAndLocationSuffix(candidate: string): {
+  path: string;
+  line?: number;
+  column?: number;
+} {
+  const matched = LINK_PATH_WITH_LOCATION_SUFFIX_REGEX.exec(candidate);
+  if (!matched || matched[1].length === 0) {
+    return { path: candidate };
+  }
+
+  const line = Number.parseInt(matched[2], 10);
+  const column = matched[3] ? Number.parseInt(matched[3], 10) : undefined;
+  if (
+    Number.isNaN(line) ||
+    line <= 0 ||
+    (column !== undefined && (Number.isNaN(column) || column <= 0))
+  ) {
+    return { path: candidate };
+  }
+
+  return {
+    path: matched[1],
+    line,
+    ...(column !== undefined ? { column } : {})
+  };
+}
+
+function detectOpenablePathTarget(token: string): OpenableLinkTarget | undefined {
+  const withLocation = splitPathAndLocationSuffix(token);
+  if (!looksLikePathCandidate(withLocation.path)) {
+    return undefined;
+  }
+
+  return {
+    kind: "path",
+    path: withLocation.path,
+    ...(withLocation.line !== undefined ? { line: withLocation.line } : {}),
+    ...(withLocation.column !== undefined ? { column: withLocation.column } : {})
+  };
+}
+
+function detectOpenableLinksInText(text: string): DetectedOpenableLink[] {
+  const links: DetectedOpenableLink[] = [];
+  let match = LINK_TOKEN_REGEX.exec(text);
+
+  while (match) {
+    const rawToken = match[0];
+    const tokenStart = match.index;
+    const trimmed = trimTokenEdges(rawToken);
+
+    if (trimmed.trimmed.length > 0) {
+      const tokenLogicalStart = tokenStart + trimmed.startOffset;
+      let urlMatch = HTTP_LINK_IN_TOKEN_REGEX.exec(trimmed.trimmed);
+      let foundUrl = false;
+
+      while (urlMatch) {
+        const rawUrl = urlMatch[0];
+        const urlOffset = urlMatch.index;
+        const urlTrimmed = trimTokenEdges(rawUrl);
+        if (urlTrimmed.trimmed.length > 0) {
+          const parsedUrl = parseHttpUrl(urlTrimmed.trimmed);
+          if (parsedUrl) {
+            const urlStartOffset = tokenLogicalStart + urlOffset + urlTrimmed.startOffset;
+            const urlEndOffsetExclusive =
+              tokenLogicalStart + urlOffset + rawUrl.length - urlTrimmed.endOffset;
+
+            links.push({
+              startOffset: urlStartOffset,
+              endOffsetExclusive: urlEndOffsetExclusive,
+              text: urlTrimmed.trimmed,
+              target: {
+                kind: "url",
+                url: parsedUrl
+              }
+            });
+            foundUrl = true;
+          }
+        }
+
+        urlMatch = HTTP_LINK_IN_TOKEN_REGEX.exec(trimmed.trimmed);
+      }
+
+      HTTP_LINK_IN_TOKEN_REGEX.lastIndex = 0;
+
+      if (foundUrl || trimmed.trimmed.includes("http://") || trimmed.trimmed.includes("https://")) {
+        match = LINK_TOKEN_REGEX.exec(text);
+        continue;
+      }
+
+      const pathTarget = detectOpenablePathTarget(trimmed.trimmed);
+      if (pathTarget) {
+        links.push({
+          startOffset: tokenLogicalStart,
+          endOffsetExclusive: tokenLogicalStart + trimmed.trimmed.length,
+          text: trimmed.trimmed,
+          target: pathTarget
+        });
+      }
+    }
+
+    match = LINK_TOKEN_REGEX.exec(text);
+  }
+
+  LINK_TOKEN_REGEX.lastIndex = 0;
+  return links;
+}
+
+function readWrappedLineGroup(terminal: Terminal, bufferLineIndex: number): WrappedLineGroup | null {
+  const activeBuffer = terminal.buffer.active;
+  const lineCount = activeBuffer.length;
+
+  if (bufferLineIndex < 0 || bufferLineIndex >= lineCount) {
+    return null;
+  }
+
+  let startIndex = bufferLineIndex;
+  while (startIndex > 0) {
+    const line = activeBuffer.getLine(startIndex);
+    if (!line?.isWrapped) {
+      break;
+    }
+    startIndex -= 1;
+  }
+
+  const segments: WrappedLineSegment[] = [];
+  let combinedText = "";
+  let offset = 0;
+
+  for (let idx = startIndex; idx < lineCount; idx += 1) {
+    const line = activeBuffer.getLine(idx);
+    if (!line) {
+      break;
+    }
+
+    if (idx !== startIndex && !line.isWrapped) {
+      break;
+    }
+
+    const text = line.translateToString(false);
+    const startOffset = offset;
+    offset += text.length;
+    combinedText += text;
+    segments.push({
+      bufferLineIndex: idx,
+      text,
+      startOffset,
+      endOffset: offset
+    });
+  }
+
+  return {
+    combinedText,
+    segments
+  };
+}
+
+function mapLinkToSegment(
+  link: DetectedOpenableLink,
+  segment: WrappedLineSegment
+): { startColumn: number; endColumnExclusive: number } | null {
+  const start = Math.max(link.startOffset, segment.startOffset);
+  const end = Math.min(link.endOffsetExclusive, segment.endOffset);
+  if (start >= end) {
+    return null;
+  }
+
+  return {
+    startColumn: start - segment.startOffset,
+    endColumnExclusive: end - segment.startOffset
+  };
+}
+
 function isHilogBatchMessage(message: HostMessage): message is HostMessage & {
   type: "event";
   payload: { name: "hdc.hilog.batch"; data: HdcHilogBatchEventData };
@@ -340,6 +616,13 @@ export function HilogConsolePanel({
   historyLimit,
   theme
 }: HilogConsolePanelProps) {
+  const runtimeHostRef = useRef(resolveBootstrap(window).host);
+  const hostBridgeRef = useRef<HarmonyHostBridgeClient | null>(null);
+  if (!hostBridgeRef.current) {
+    hostBridgeRef.current = createHostBridgeClient();
+  }
+  const hostCapabilitiesRef = useRef<IdeCapabilities | null>(null);
+  const hostCapabilitiesRequestRef = useRef<Promise<IdeCapabilities | null> | null>(null);
   const terminalContainerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -595,6 +878,132 @@ export function HilogConsolePanel({
     });
   }, []);
 
+  const getHostCapabilities = useCallback(async (): Promise<IdeCapabilities | null> => {
+    const hostBridge = hostBridgeRef.current;
+    if (!hostBridge) {
+      return null;
+    }
+
+    if (hostCapabilitiesRef.current) {
+      return hostCapabilitiesRef.current;
+    }
+
+    if (hostCapabilitiesRequestRef.current) {
+      return hostCapabilitiesRequestRef.current;
+    }
+
+    const request = hostBridge
+      .getCapabilities()
+      .then((capabilities) => {
+        hostCapabilitiesRef.current = capabilities;
+        return capabilities;
+      })
+      .catch(() => null)
+      .finally(() => {
+        hostCapabilitiesRequestRef.current = null;
+      });
+
+    hostCapabilitiesRequestRef.current = request;
+    return request;
+  }, []);
+
+  const activateOpenableTarget = useCallback(
+    async (target: OpenableLinkTarget, event: MouseEvent) => {
+      const modifierActive = isMacPlatform() ? event.metaKey : event.ctrlKey;
+      const debugEvent = {
+        button: event.button,
+        buttons: event.buttons,
+        which: event.which,
+        metaKey: event.metaKey,
+        ctrlKey: event.ctrlKey,
+        modifierActive
+      };
+
+      if (!shouldActivateLink(event)) {
+        console.debug("[hilog-link] ignored click (modifier/button mismatch)", {
+          target,
+          ...debugEvent
+        });
+        return;
+      }
+
+      if (target.kind === "url") {
+        const capabilities = await getHostCapabilities();
+        const runtimeHost = runtimeHostRef.current;
+        console.debug("[hilog-link] opening url", {
+          url: target.url,
+          runtimeHost,
+          capabilities,
+          ...debugEvent
+        });
+
+        if (capabilities?.["ide.openExternal"]) {
+          try {
+            const result = await hostBridgeRef.current?.invoke("ide.openExternal", { url: target.url });
+            console.debug("[hilog-link] ide.openExternal result", {
+              url: target.url,
+              opened: result?.opened ?? false
+            });
+            return;
+          } catch {
+            console.debug("[hilog-link] ide.openExternal failed", {
+              url: target.url
+            });
+          }
+        }
+
+        if (runtimeHost === "browser") {
+          try {
+            window.open(target.url, "_blank", "noopener,noreferrer");
+          } catch {
+            // no-op
+          }
+        } else {
+          console.debug("[hilog-link] skip window.open fallback for non-browser host", {
+            url: target.url,
+            runtimeHost
+          });
+        }
+        return;
+      }
+
+      const capabilities = await getHostCapabilities();
+      if (!capabilities?.["ide.openPath"]) {
+        return;
+      }
+
+      try {
+        const result = await hostBridgeRef.current?.invoke("ide.openPath", {
+          path: target.path,
+          ...(target.line !== undefined ? { line: target.line } : {}),
+          ...(target.column !== undefined ? { column: target.column } : {})
+        });
+        console.debug("[hilog-link] ide.openPath result", {
+          path: target.path,
+          line: target.line,
+          column: target.column,
+          opened: result?.opened ?? false
+        });
+      } catch {
+        // no-op
+      }
+    },
+    [getHostCapabilities]
+  );
+
+  useEffect(() => {
+    void getHostCapabilities();
+  }, [getHostCapabilities]);
+
+  useEffect(() => {
+    return () => {
+      hostCapabilitiesRef.current = null;
+      hostCapabilitiesRequestRef.current = null;
+      hostBridgeRef.current?.dispose();
+      hostBridgeRef.current = null;
+    };
+  }, []);
+
   useEffect(() => {
     const container = terminalContainerRef.current;
     if (!container) {
@@ -614,6 +1023,66 @@ export function HilogConsolePanel({
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
     terminal.open(container);
+    const linkProviderDisposable = terminal.registerLinkProvider({
+      provideLinks: (bufferLineNumber, callback) => {
+        const bufferLineIndex = bufferLineNumber - 1;
+        const wrappedGroup = readWrappedLineGroup(terminal, bufferLineIndex);
+        if (!wrappedGroup || wrappedGroup.combinedText.length === 0) {
+          callback(undefined);
+          return;
+        }
+
+        const logicalLinks = detectOpenableLinksInText(wrappedGroup.combinedText);
+        if (logicalLinks.length === 0) {
+          callback(undefined);
+          return;
+        }
+
+        const currentSegment = wrappedGroup.segments.find(
+          (segment) => segment.bufferLineIndex === bufferLineIndex
+        );
+        if (!currentSegment) {
+          callback(undefined);
+          return;
+        }
+
+        const links: ILink[] = [];
+        for (const link of logicalLinks) {
+          const mapped = mapLinkToSegment(link, currentSegment);
+          if (!mapped) {
+            continue;
+          }
+
+          links.push({
+            range: {
+              start: {
+                x: mapped.startColumn + 1,
+                y: bufferLineNumber
+              },
+              end: {
+                x: mapped.endColumnExclusive + 1,
+                y: bufferLineNumber
+              }
+            },
+            text: link.text,
+            decorations: {
+              underline: true,
+              pointerCursor: true
+            },
+            activate: (event) => {
+              void activateOpenableTarget(link.target, event);
+            }
+          });
+        }
+
+        if (links.length === 0) {
+          callback(undefined);
+          return;
+        }
+
+        callback(links);
+      }
+    });
 
     terminalRef.current = terminal;
     fitAddonRef.current = fitAddon;
@@ -654,6 +1123,7 @@ export function HilogConsolePanel({
         rafIdRef.current = null;
       }
 
+      linkProviderDisposable.dispose();
       scrollDisposable.dispose();
       observer?.disconnect();
       window.removeEventListener("resize", fit);
@@ -663,7 +1133,7 @@ export function HilogConsolePanel({
       viewVersionRef.current += 1;
       queueRef.current = [];
     };
-  }, []);
+  }, [activateOpenableTarget]);
 
   const redrawFromHistory = useCallback(() => {
     clearVisibleOnly();
