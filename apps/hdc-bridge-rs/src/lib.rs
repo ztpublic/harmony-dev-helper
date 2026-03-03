@@ -12,8 +12,10 @@ use tokio::time::{interval, MissedTickBehavior};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
 mod hdc_bin;
+mod mcp;
 
 use hdc_bin::{build_hdc_client_from_config, get_bin_config, set_custom_bin_path};
+use mcp::run_mcp_http_server;
 
 pub const DEFAULT_WS_ADDR: &str = "127.0.0.1:8787";
 
@@ -22,6 +24,7 @@ const QUEUE_MAX_LINES: usize = 4_000;
 const BATCH_INTERVAL_MS: u64 = 40;
 const BATCH_MAX_LINES: usize = 200;
 const BATCH_MAX_BYTES: usize = 64 * 1024;
+const DEFAULT_MCP_PORT_OFFSET: u16 = 100;
 
 static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -178,6 +181,38 @@ fn now_ms() -> u64 {
 fn next_message_id(prefix: &str) -> String {
     let sequence = NEXT_MESSAGE_ID.fetch_add(1, Ordering::Relaxed);
     format!("{prefix}-{}-{sequence}", now_ms())
+}
+
+pub fn derive_default_mcp_http_addr(ws_addr: &str) -> Result<String, String> {
+    let trimmed = ws_addr.trim();
+    if trimmed.is_empty() {
+        return Err("websocket address must be a non-empty string".to_string());
+    }
+
+    let (host_raw, ws_port_raw) = trimmed
+        .rsplit_once(':')
+        .ok_or_else(|| format!("invalid websocket address `{trimmed}`: expected <host>:<port>"))?;
+
+    let host = host_raw.trim();
+    if host.is_empty() {
+        return Err(format!(
+            "invalid websocket address `{trimmed}`: host must be non-empty"
+        ));
+    }
+
+    let ws_port = ws_port_raw.parse::<u16>().map_err(|_| {
+        format!("invalid websocket address `{trimmed}`: port must be a u16 integer")
+    })?;
+
+    let mcp_port = ws_port
+        .checked_add(DEFAULT_MCP_PORT_OFFSET)
+        .ok_or_else(|| {
+            format!(
+                "cannot derive MCP HTTP address from websocket address `{trimmed}`: port overflow"
+            )
+        })?;
+
+    Ok(format!("{host}:{mcp_port}"))
 }
 
 fn host_message(id: String, kind: &str, payload: Value) -> Envelope {
@@ -1027,7 +1062,7 @@ async fn handle_client(stream: TcpStream) {
     let _ = writer_task.await;
 }
 
-pub async fn run_bridge(ws_addr: &str) -> Result<(), String> {
+async fn run_websocket_bridge(ws_addr: &str) -> Result<(), String> {
     let listener = TcpListener::bind(ws_addr)
         .await
         .map_err(|error| format!("failed to bind websocket bridge ({ws_addr}): {error}"))?;
@@ -1048,12 +1083,36 @@ pub async fn run_bridge(ws_addr: &str) -> Result<(), String> {
     }
 }
 
+pub async fn run_bridge_with_mcp(ws_addr: &str, mcp_http_addr: Option<&str>) -> Result<(), String> {
+    let resolved_mcp_http_addr = match mcp_http_addr {
+        Some(value) => {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err("mcp http address must be a non-empty string".to_string());
+            }
+            trimmed.to_string()
+        }
+        None => derive_default_mcp_http_addr(ws_addr)?,
+    };
+
+    tokio::try_join!(
+        run_websocket_bridge(ws_addr),
+        run_mcp_http_server(&resolved_mcp_http_addr)
+    )?;
+
+    Ok(())
+}
+
+pub async fn run_bridge(ws_addr: &str) -> Result<(), String> {
+    run_bridge_with_mcp(ws_addr, None).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        format_hilog_entry, kind_to_char, level_to_ansi, level_to_char, optional_positive_i64_arg,
-        optional_string_arg, parse_hidumper_processes, HilogBatcher, HilogPidOption,
-        BATCH_MAX_BYTES, BATCH_MAX_LINES, QUEUE_MAX_LINES,
+        derive_default_mcp_http_addr, format_hilog_entry, kind_to_char, level_to_ansi,
+        level_to_char, optional_positive_i64_arg, optional_string_arg, parse_hidumper_processes,
+        HilogBatcher, HilogPidOption, BATCH_MAX_BYTES, BATCH_MAX_LINES, QUEUE_MAX_LINES,
     };
     use hdckit_rs::HilogEntry;
     use serde_json::json;
@@ -1260,6 +1319,38 @@ invalid row
                     command: "crypto.elf hongmeng".to_string()
                 }
             ]
+        );
+    }
+
+    #[test]
+    fn derive_default_mcp_http_addr_uses_ws_port_plus_offset() {
+        assert_eq!(
+            derive_default_mcp_http_addr("127.0.0.1:8787").expect("derive should succeed"),
+            "127.0.0.1:8887"
+        );
+        assert_eq!(
+            derive_default_mcp_http_addr("localhost:8788").expect("derive should succeed"),
+            "localhost:8888"
+        );
+    }
+
+    #[test]
+    fn derive_default_mcp_http_addr_rejects_invalid_format() {
+        let error =
+            derive_default_mcp_http_addr("127.0.0.1").expect_err("invalid address must fail");
+        assert_eq!(
+            error,
+            "invalid websocket address `127.0.0.1`: expected <host>:<port>"
+        );
+    }
+
+    #[test]
+    fn derive_default_mcp_http_addr_rejects_port_overflow() {
+        let error = derive_default_mcp_http_addr("127.0.0.1:65535")
+            .expect_err("overflowing derived port must fail");
+        assert_eq!(
+            error,
+            "cannot derive MCP HTTP address from websocket address `127.0.0.1:65535`: port overflow"
         );
     }
 }

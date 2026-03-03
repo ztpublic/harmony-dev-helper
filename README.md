@@ -5,7 +5,7 @@ Shared Harmony webview architecture for:
 - VSCode extension
 - IntelliJ plugin
 
-All hosts use the same frontend and communicate with the backend over WebSocket (no Tauri `invoke` API path).
+All hosts use the same frontend and communicate with the backend over WebSocket (no Tauri `invoke` API path). The same Rust backend process also exposes an MCP Streamable HTTP endpoint.
 
 ## Current state
 
@@ -24,7 +24,7 @@ HDC binary config is persisted to:
 
 - `pnpm` workspaces + `turbo`
 - React + TypeScript + Vite (`apps/webview`)
-- Rust WebSocket bridge (`apps/hdc-bridge-rs`)
+- Rust WebSocket + MCP Streamable HTTP bridge (`apps/hdc-bridge-rs`)
 - Vendored `hdckit-rs` (`apps/desktop/src-tauri/vendor/hdckit-rs`)
 - Tauri v2 desktop shell
 - Storybook for webview component work
@@ -67,7 +67,10 @@ pnpm lint
 pnpm dev:desktop
 ```
 
-Starts the bridge in-process on `ws://127.0.0.1:8787`.
+Starts the bridge in-process on:
+- `ws://127.0.0.1:8787` (web frontend protocol)
+- `http://127.0.0.1:8887/mcp` (MCP Streamable HTTP)
+- `http://127.0.0.1:8887/health` (liveness)
 
 ### VSCode extension
 
@@ -106,20 +109,40 @@ Notes:
 
 `apps/hdc-bridge-rs` is the single HDC backend implementation.
 
-- Desktop: embedded bridge at `ws://127.0.0.1:8787`
-- VSCode: sidecar bridge at `ws://127.0.0.1:8788`
-- IntelliJ: sidecar bridge at `ws://127.0.0.1:8789`
+- Desktop:
+  - WebSocket: `ws://127.0.0.1:8787`
+  - MCP HTTP: `http://127.0.0.1:8887/mcp`
+- VSCode:
+  - WebSocket: `ws://127.0.0.1:8788`
+  - MCP HTTP: `http://127.0.0.1:8888/mcp`
+- IntelliJ:
+  - WebSocket: `ws://127.0.0.1:8789`
+  - MCP HTTP: `http://127.0.0.1:8889/mcp`
+
+### MCP address derivation and override
+
+By default, MCP HTTP bind address is derived from WebSocket bind address:
+- host is preserved
+- port = `ws_port + 100`
+
+CLI options:
+- `--ws-addr <host:port>`
+- `--mcp-http-addr <host:port>` (optional override; when omitted, derived from `--ws-addr`)
+
+MCP endpoints:
+- `POST|GET|DELETE /mcp` (Streamable HTTP transport)
+- `GET /health` (returns `ok`)
 
 ### Sidecar startup order
 
 VSCode:
 1. `HARMONY_HDC_BRIDGE_BIN` (absolute path to prebuilt `hdc-bridge-rs`)
 2. Bundled binary (`apps/vscode-extension/bin/hdc-bridge-rs`) when present
-3. Fallback: `cargo run --manifest-path apps/hdc-bridge-rs/Cargo.toml -- --ws-addr <host:port>`
+3. Fallback: `cargo run --manifest-path apps/hdc-bridge-rs/Cargo.toml -- --ws-addr <host:port> [--mcp-http-addr <host:port>]`
 
 IntelliJ:
 1. `HARMONY_HDC_BRIDGE_BIN` (absolute path to prebuilt `hdc-bridge-rs`)
-2. Fallback: `cargo run --manifest-path apps/hdc-bridge-rs/Cargo.toml -- --ws-addr <host:port>`
+2. Fallback: `cargo run --manifest-path apps/hdc-bridge-rs/Cargo.toml -- --ws-addr <host:port> [--mcp-http-addr <host:port>]`
 
 Optional manifest override:
 - `HARMONY_HDC_BRIDGE_MANIFEST_PATH`
