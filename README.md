@@ -25,7 +25,7 @@ HDC binary config is persisted to:
 - `pnpm` workspaces + `turbo`
 - React + TypeScript + Vite (`apps/webview`)
 - Rust WebSocket + MCP Streamable HTTP bridge (`apps/hdc-bridge-rs`)
-- Vendored `hdckit-rs` (`apps/desktop/src-tauri/vendor/hdckit-rs`)
+- Shared `hdckit-rs` crate (`apps/hdckit-rs`)
 - Tauri v2 desktop shell
 - Storybook for webview component work
 
@@ -33,6 +33,7 @@ HDC binary config is persisted to:
 
 - `apps/webview`: shared React UI used by all hosts
 - `apps/hdc-bridge-rs`: shared Rust backend bridge (library + binary)
+- `apps/hdckit-rs`: shared Rust HDC client crate used by bridge/desktop flows
 - `apps/desktop`: Tauri shell; embeds bridge in-process
 - `apps/vscode-extension`: VSCode host; starts bridge sidecar
 - `apps/intellij-plugin`: IntelliJ host; starts bridge sidecar
