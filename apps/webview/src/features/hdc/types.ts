@@ -7,6 +7,7 @@ export interface DeviceSelectionState {
   isSupported: boolean;
   status: DeviceLoadState;
   devices: string[];
+  deviceLabels: Record<string, string>;
   selectedDevice: string | null;
   isRefreshing: boolean;
   errorMessage?: string;

@@ -174,7 +174,7 @@ export default function App() {
               ) : (
                 deviceSelection.devices.map((device) => (
                   <option key={device} value={device}>
-                    {device}
+                    {deviceSelection.deviceLabels[device] ?? device}
                   </option>
                 ))
               )}
