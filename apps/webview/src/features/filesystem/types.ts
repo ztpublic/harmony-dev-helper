@@ -22,8 +22,10 @@ export interface FileSystemProps {
   uploadEnabled?: boolean;
   downloadEnabled?: boolean;
   deleteEnabled?: boolean;
+  openInEditorEnabled?: boolean;
   pickUploadFiles?: (targetDirectoryPath: string) => Promise<readonly string[] | null>;
   pickDownloadDirectory?: (sourceFilePath: string) => Promise<string | null>;
+  onOpenInEditor?: (entry: VfsEntry) => Promise<void>;
   recentExpandedDirectoryPaths?: readonly string[];
   onRecentExpandedDirectoryPathsChange?: (paths: readonly string[]) => void;
   onSelectionChange?: (entry: VfsEntry | null) => void;

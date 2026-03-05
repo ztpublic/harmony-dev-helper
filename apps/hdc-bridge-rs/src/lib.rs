@@ -7,6 +7,7 @@ use futures_util::{SinkExt, StreamExt};
 use hdckit_rs::HilogEntry;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
+use tokio::fs as tokio_fs;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{interval, MissedTickBehavior};
@@ -28,6 +29,7 @@ const BATCH_MAX_BYTES: usize = 64 * 1024;
 const DEFAULT_MCP_PORT_OFFSET: u16 = 100;
 const FS_LIST_EXIT_SENTINEL_PREFIX: &str = "__HARMONY_FS_EXIT:";
 const FS_DELETE_EXIT_SENTINEL_PREFIX: &str = "__HARMONY_FS_DELETE_EXIT:";
+const FS_DOWNLOAD_TEMP_MAX_BYTES_DEFAULT: u64 = 10 * 1024 * 1024;
 
 static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -426,6 +428,39 @@ fn build_fs_download_local_path(local_directory: &str, remote_path: &str) -> Res
     let file_name = device_path_basename(remote_path)
         .ok_or_else(|| "`remotePath` must include a file name".to_string())?;
     Ok(Path::new(local_directory).join(file_name))
+}
+
+fn fs_download_temp_root_dir() -> PathBuf {
+    std::env::temp_dir()
+        .join("harmony-dev-helper")
+        .join("open-in-editor")
+}
+
+fn build_fs_download_temp_local_path(remote_path: &str) -> Result<PathBuf, String> {
+    let file_name = device_path_basename(remote_path)
+        .ok_or_else(|| "`remotePath` must include a file name".to_string())?;
+    let unique_id = next_message_id("fs-download-temp");
+    Ok(fs_download_temp_root_dir().join(format!("{unique_id}-{file_name}")))
+}
+
+fn ensure_fs_download_temp_within_limit(byte_length: u64, max_bytes: u64) -> Result<(), String> {
+    if byte_length > max_bytes {
+        return Err(format!(
+            "File is too large to open in editor ({byte_length} bytes > {max_bytes} bytes limit)"
+        ));
+    }
+
+    Ok(())
+}
+
+fn ensure_fs_download_temp_utf8(bytes: &[u8]) -> Result<(), String> {
+    std::str::from_utf8(bytes)
+        .map(|_| ())
+        .map_err(|_| "Only UTF-8 text files are supported for Open in Editor".to_string())
+}
+
+async fn remove_temp_file_if_exists(path: &Path) {
+    let _ = tokio_fs::remove_file(path).await;
 }
 
 fn parse_fs_list_output(parent_path: &str, output: &str) -> Result<Vec<HdcFsListEntry>, String> {
@@ -1237,6 +1272,151 @@ async fn handle_fs_download(id: String, args: Value) -> Envelope {
     }
 }
 
+async fn handle_fs_download_temp(id: String, args: Value) -> Envelope {
+    let connect_key = match required_string_arg(&args, "connectKey") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let remote_path = match required_absolute_path_arg(&args, "remotePath") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let max_bytes = match optional_positive_i64_arg(&args, "maxBytes") {
+        Ok(value) => value
+            .map(|raw| raw as u64)
+            .unwrap_or(FS_DOWNLOAD_TEMP_MAX_BYTES_DEFAULT),
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let local_path = match build_fs_download_temp_local_path(&remote_path) {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    if let Some(parent_dir) = local_path.parent() {
+        if let Err(error) = tokio_fs::create_dir_all(parent_dir).await {
+            return hdc_error(
+                id,
+                format!(
+                    "failed to prepare temporary directory for Open in Editor ({}): {error}",
+                    parent_dir.to_string_lossy()
+                ),
+            );
+        }
+    }
+
+    let client = match build_hdc_client_from_config() {
+        Ok(value) => value,
+        Err(message) => return hdc_bin_error(id, message),
+    };
+
+    match client.get_target(connect_key) {
+        Ok(target) => match target.recv_file(&remote_path, &local_path).await {
+            Ok(()) => {
+                let metadata = match tokio_fs::metadata(&local_path).await {
+                    Ok(value) => value,
+                    Err(error) => {
+                        remove_temp_file_if_exists(&local_path).await;
+                        return hdc_error(
+                            id,
+                            format!(
+                                "failed to inspect downloaded temporary file ({}): {error}",
+                                local_path.to_string_lossy()
+                            ),
+                        );
+                    }
+                };
+
+                if let Err(message) = ensure_fs_download_temp_within_limit(metadata.len(), max_bytes) {
+                    remove_temp_file_if_exists(&local_path).await;
+                    return hdc_error(id, message);
+                }
+
+                let bytes = match tokio_fs::read(&local_path).await {
+                    Ok(value) => value,
+                    Err(error) => {
+                        remove_temp_file_if_exists(&local_path).await;
+                        return hdc_error(
+                            id,
+                            format!(
+                                "failed to read downloaded temporary file ({}): {error}",
+                                local_path.to_string_lossy()
+                            ),
+                        );
+                    }
+                };
+
+                if let Err(message) =
+                    ensure_fs_download_temp_within_limit(bytes.len() as u64, max_bytes)
+                {
+                    remove_temp_file_if_exists(&local_path).await;
+                    return hdc_error(id, message);
+                }
+
+                if let Err(message) = ensure_fs_download_temp_utf8(&bytes) {
+                    remove_temp_file_if_exists(&local_path).await;
+                    return hdc_error(id, message);
+                }
+
+                host_message(
+                    id,
+                    "event",
+                    json!({
+                      "name": "hdc.fs.downloadTemp.result",
+                      "data": {
+                        "localPath": local_path.to_string_lossy().to_string(),
+                        "byteLength": bytes.len()
+                      }
+                    }),
+                )
+            }
+            Err(error) => {
+                remove_temp_file_if_exists(&local_path).await;
+                hdc_error(id, error.to_string())
+            }
+        },
+        Err(error) => hdc_error(id, error.to_string()),
+    }
+}
+
 async fn handle_fs_delete(id: String, args: Value) -> Envelope {
     let connect_key = match required_string_arg(&args, "connectKey") {
         Ok(value) => value,
@@ -1341,6 +1521,7 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
                   "hdc.fs.list": true,
                   "hdc.fs.upload": true,
                   "hdc.fs.download": true,
+                  "hdc.fs.downloadTemp": true,
                   "hdc.fs.delete": true,
                   "hdc.getBinConfig": true,
                   "hdc.setBinPath": true,
@@ -1504,6 +1685,7 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
         "hdc.fs.list" => handle_fs_list(id, invoke.args).await,
         "hdc.fs.upload" => handle_fs_upload(id, invoke.args).await,
         "hdc.fs.download" => handle_fs_download(id, invoke.args).await,
+        "hdc.fs.downloadTemp" => handle_fs_download_temp(id, invoke.args).await,
         "hdc.fs.delete" => handle_fs_delete(id, invoke.args).await,
         "hdc.hilog.subscribe" => handle_hilog_subscribe(id, invoke.args, session).await,
         "hdc.hilog.unsubscribe" => handle_hilog_unsubscribe(id, invoke.args, session).await,
@@ -1648,18 +1830,19 @@ pub async fn run_bridge(ws_addr: &str) -> Result<(), String> {
 mod tests {
     use super::{
         build_fs_delete_shell_command, build_fs_download_local_path, build_fs_list_shell_command,
-        build_fs_upload_remote_path, derive_default_mcp_http_addr, format_hilog_entry,
-        join_device_path, kind_to_char, level_to_ansi, level_to_char, optional_bool_arg,
-        optional_positive_i64_arg, optional_string_arg, parse_fs_delete_output,
-        parse_fs_list_output, parse_hidumper_processes, required_absolute_local_path_arg,
-        shell_single_quote, HdcFsListEntry, HilogBatcher, HilogPidOption, BATCH_MAX_BYTES,
-        BATCH_MAX_LINES, FS_DELETE_EXIT_SENTINEL_PREFIX, FS_LIST_EXIT_SENTINEL_PREFIX,
-        QUEUE_MAX_LINES,
+        build_fs_download_temp_local_path, build_fs_upload_remote_path, derive_default_mcp_http_addr,
+        ensure_fs_download_temp_utf8, ensure_fs_download_temp_within_limit, format_hilog_entry,
+        fs_download_temp_root_dir, join_device_path, kind_to_char, level_to_ansi, level_to_char,
+        optional_bool_arg, optional_positive_i64_arg, optional_string_arg, parse_fs_delete_output,
+        parse_fs_list_output, parse_hidumper_processes, remove_temp_file_if_exists,
+        required_absolute_local_path_arg, shell_single_quote, HdcFsListEntry, HilogBatcher,
+        HilogPidOption, BATCH_MAX_BYTES, BATCH_MAX_LINES, FS_DELETE_EXIT_SENTINEL_PREFIX,
+        FS_LIST_EXIT_SENTINEL_PREFIX, QUEUE_MAX_LINES,
     };
     use hdckit_rs::HilogEntry;
     use serde_json::json;
     use std::path::Path;
-    use std::time::{Duration, UNIX_EPOCH};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
     fn build_entry(message: &str) -> HilogEntry {
         HilogEntry {
@@ -1914,6 +2097,49 @@ mod tests {
         let error = build_fs_download_local_path("/tmp/downloads", "/")
             .expect_err("remote path without basename should fail");
         assert_eq!(error, "`remotePath` must include a file name");
+    }
+
+    #[test]
+    fn build_fs_download_temp_local_path_uses_temp_root_and_remote_basename() {
+        let resolved = build_fs_download_temp_local_path("/data/log/hilog.log")
+            .expect("temp download path should resolve");
+        let expected_root = fs_download_temp_root_dir();
+        assert!(resolved.starts_with(&expected_root));
+        let file_name = resolved
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("file name should be utf-8");
+        assert!(file_name.ends_with("-hilog.log"));
+    }
+
+    #[test]
+    fn ensure_fs_download_temp_within_limit_rejects_large_files() {
+        let error = ensure_fs_download_temp_within_limit(11, 10).expect_err("size check should fail");
+        assert_eq!(
+            error,
+            "File is too large to open in editor (11 bytes > 10 bytes limit)"
+        );
+    }
+
+    #[test]
+    fn ensure_fs_download_temp_utf8_rejects_non_utf8_bytes() {
+        let error = ensure_fs_download_temp_utf8(&[0xff, 0xfe]).expect_err("utf-8 check should fail");
+        assert_eq!(error, "Only UTF-8 text files are supported for Open in Editor");
+    }
+
+    #[tokio::test]
+    async fn remove_temp_file_if_exists_deletes_existing_file() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system clock should be after unix epoch")
+            .as_nanos();
+        let temp_file_path = std::env::temp_dir().join(format!("harmony-remove-temp-{unique}.txt"));
+
+        std::fs::write(&temp_file_path, b"temporary").expect("temp file should be writable");
+        assert!(temp_file_path.exists());
+
+        remove_temp_file_if_exists(&temp_file_path).await;
+        assert!(!temp_file_path.exists());
     }
 
     #[test]

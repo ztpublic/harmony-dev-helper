@@ -314,8 +314,10 @@ export function FileSystem({
   uploadEnabled = false,
   downloadEnabled = false,
   deleteEnabled = false,
+  openInEditorEnabled = false,
   pickUploadFiles,
   pickDownloadDirectory,
+  onOpenInEditor,
   recentExpandedDirectoryPaths,
   onRecentExpandedDirectoryPathsChange,
   onSelectionChange,
@@ -347,6 +349,7 @@ export function FileSystem({
   const inFlightRef = useRef(new Set<string>());
   const onSelectionChangeRef = useRef(onSelectionChange);
   const onOpenFileRef = useRef(onOpenFile);
+  const onOpenInEditorRef = useRef(onOpenInEditor);
 
   const treeHeight = normalizeTreeHeight(height);
   const recentExpandedDirectoryPathOptions = useMemo(
@@ -429,6 +432,10 @@ export function FileSystem({
   useEffect(() => {
     onOpenFileRef.current = onOpenFile;
   }, [onOpenFile]);
+
+  useEffect(() => {
+    onOpenInEditorRef.current = onOpenInEditor;
+  }, [onOpenInEditor]);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -1005,6 +1012,25 @@ export function FileSystem({
     }
   }, [contextMenu, downloadEnabled, pickDownloadDirectory, vfs]);
 
+  const handleContextMenuOpenInEditor = useCallback(async () => {
+    if (!contextMenu || contextMenu.entry.kind !== "file" || !openInEditorEnabled || !onOpenInEditorRef.current) {
+      return;
+    }
+
+    setContextMenu(null);
+    setPathNavigationError(undefined);
+    setIsFileTransferPending(true);
+
+    try {
+      await onOpenInEditorRef.current(contextMenu.entry);
+      setPathNavigationError(undefined);
+    } catch (error) {
+      setPathNavigationError(toErrorMessage(error));
+    } finally {
+      setIsFileTransferPending(false);
+    }
+  }, [contextMenu, openInEditorEnabled]);
+
   const reloadDirectoryAtPath = useCallback(
     async (directoryPath: string) => {
       const version = cacheVersionRef.current;
@@ -1200,6 +1226,10 @@ export function FileSystem({
     Boolean(downloadEnabled) &&
     Boolean(pickDownloadDirectory) &&
     contextMenu?.entry.kind === "file";
+  const showOpenInEditorAction =
+    Boolean(openInEditorEnabled) &&
+    Boolean(onOpenInEditor) &&
+    contextMenu?.entry.kind === "file";
   const showDeleteAction = Boolean(deleteEnabled) && Boolean(contextMenu);
   const deleteDialogEntryLabel = deleteDialog?.entry.name || deleteDialog?.entry.path || "";
 
@@ -1387,6 +1417,19 @@ export function FileSystem({
               }}
             >
               Download
+            </button>
+          ) : null}
+
+          {showOpenInEditorAction ? (
+            <button
+              type="button"
+              className="file-system-context-menu-item"
+              role="menuitem"
+              onClick={() => {
+                void handleContextMenuOpenInEditor();
+              }}
+            >
+              Open in Editor
             </button>
           ) : null}
 

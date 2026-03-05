@@ -3,12 +3,17 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileSystem } from "./FileSystem";
 import { createHdcVirtualFileSystem } from "./hdcVirtualFileSystem";
 
+const OPEN_IN_EDITOR_MAX_BYTES = 10 * 1024 * 1024;
+const FILE_TRANSFER_TIMEOUT_MS = 300_000;
+
 interface DeviceFileExplorerPanelProps {
   client?: HarmonyWebSocketClient;
   connectionState: ConnectionState;
   hdcAvailable: boolean;
   selectedDevice: string | null;
   hostFilePickerAvailable: boolean;
+  openInEditorAvailable: boolean;
+  openLocalPathInEditor: (localPath: string) => Promise<void>;
   pickUploadFiles: (targetDirectoryPath: string) => Promise<readonly string[] | null>;
   pickDownloadDirectory: (sourceFilePath: string) => Promise<string | null>;
 }
@@ -46,6 +51,8 @@ export function DeviceFileExplorerPanel({
   hdcAvailable,
   selectedDevice,
   hostFilePickerAvailable,
+  openInEditorAvailable,
+  openLocalPathInEditor,
   pickUploadFiles,
   pickDownloadDirectory
 }: DeviceFileExplorerPanelProps) {
@@ -53,6 +60,7 @@ export function DeviceFileExplorerPanel({
   const [supportsFsList, setSupportsFsList] = useState(false);
   const [supportsFsUpload, setSupportsFsUpload] = useState(false);
   const [supportsFsDownload, setSupportsFsDownload] = useState(false);
+  const [supportsFsDownloadTemp, setSupportsFsDownloadTemp] = useState(false);
   const [supportsFsDelete, setSupportsFsDelete] = useState(false);
   const [capabilityError, setCapabilityError] = useState<string>();
   const [recentExpandedPathsByDevice, setRecentExpandedPathsByDevice] = useState<
@@ -67,6 +75,7 @@ export function DeviceFileExplorerPanel({
       setSupportsFsList(false);
       setSupportsFsUpload(false);
       setSupportsFsDownload(false);
+      setSupportsFsDownloadTemp(false);
       setSupportsFsDelete(false);
       setCapabilityError(undefined);
       return;
@@ -85,6 +94,7 @@ export function DeviceFileExplorerPanel({
         setSupportsFsList(Boolean(result.capabilities["hdc.fs.list"]));
         setSupportsFsUpload(Boolean(result.capabilities["hdc.fs.upload"]));
         setSupportsFsDownload(Boolean(result.capabilities["hdc.fs.download"]));
+        setSupportsFsDownloadTemp(Boolean(result.capabilities["hdc.fs.downloadTemp"]));
         setSupportsFsDelete(Boolean(result.capabilities["hdc.fs.delete"]));
         setCapabilitiesStatus("ready");
       } catch (error) {
@@ -95,6 +105,7 @@ export function DeviceFileExplorerPanel({
         setSupportsFsList(false);
         setSupportsFsUpload(false);
         setSupportsFsDownload(false);
+        setSupportsFsDownloadTemp(false);
         setSupportsFsDelete(false);
         setCapabilitiesStatus("error");
         setCapabilityError(toErrorMessage(error));
@@ -149,6 +160,35 @@ export function DeviceFileExplorerPanel({
     [selectedDevice]
   );
 
+  const handleOpenInEditor = useCallback(
+    async (entry: { path: string; kind: "directory" | "file" }) => {
+      if (
+        !client ||
+        !selectedDevice ||
+        entry.kind !== "file" ||
+        !supportsFsDownloadTemp ||
+        !openInEditorAvailable
+      ) {
+        return;
+      }
+
+      const downloadResult = await client.invoke(
+        "hdc.fs.downloadTemp",
+        {
+          connectKey: selectedDevice,
+          remotePath: entry.path,
+          maxBytes: OPEN_IN_EDITOR_MAX_BYTES
+        },
+        {
+          timeoutMs: FILE_TRANSFER_TIMEOUT_MS
+        }
+      );
+
+      await openLocalPathInEditor(downloadResult.localPath);
+    },
+    [client, openInEditorAvailable, openLocalPathInEditor, selectedDevice, supportsFsDownloadTemp]
+  );
+
   if (connectionState !== "open") {
     return <ExplorerPlaceholder message="Waiting for websocket connection." />;
   }
@@ -194,8 +234,10 @@ export function DeviceFileExplorerPanel({
       uploadEnabled={supportsFsUpload && hostFilePickerAvailable}
       downloadEnabled={supportsFsDownload && hostFilePickerAvailable}
       deleteEnabled={supportsFsDelete}
+      openInEditorEnabled={supportsFsDownloadTemp && openInEditorAvailable}
       pickUploadFiles={pickUploadFiles}
       pickDownloadDirectory={pickDownloadDirectory}
+      onOpenInEditor={handleOpenInEditor}
       recentExpandedDirectoryPaths={recentExpandedDirectoryPaths}
       onRecentExpandedDirectoryPathsChange={handleRecentExpandedDirectoryPathsChange}
     />

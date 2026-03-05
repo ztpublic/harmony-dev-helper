@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as net from "node:net";
+import * as os from "node:os";
 import * as path from "node:path";
 import type {
   HostBridgeErrorMessage,
@@ -20,6 +21,8 @@ const HOST_BRIDGE_CHANNEL = "harmony-host";
 
 let bridgeProcess: ChildProcess | undefined;
 let bridgeStartup: Promise<void> | undefined;
+let extensionOutputChannel: vscode.OutputChannel | undefined;
+const trackedHarmonyTempFilePaths = new Set<string>();
 
 type HostBridgeAction =
   | "ide.getCapabilities"
@@ -73,6 +76,16 @@ interface IdeOpenFilePickerArgs {
 interface IdeOpenFilePickerResult {
   canceled: boolean;
   paths: string[];
+}
+
+function harmonyOpenInEditorTempRootPath(): string {
+  return path.resolve(os.tmpdir(), "harmony-dev-helper", "open-in-editor");
+}
+
+function isTrackedHarmonyOpenInEditorTempPath(filePath: string): boolean {
+  const resolvedPath = path.resolve(filePath);
+  const rootPath = harmonyOpenInEditorTempRootPath();
+  return resolvedPath === rootPath || resolvedPath.startsWith(`${rootPath}${path.sep}`);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -734,7 +747,8 @@ async function openFileInEditor(args: IdeOpenFileArgs): Promise<void> {
     throw new Error("FILE_NOT_FOUND");
   }
 
-  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(args.path));
+  const resolvedPath = path.resolve(args.path);
+  const document = await vscode.workspace.openTextDocument(vscode.Uri.file(resolvedPath));
   const requestedLine = (args.line ?? 1) - 1;
   const line = Math.max(0, Math.min(requestedLine, Math.max(0, document.lineCount - 1)));
   const maxColumn = document.lineAt(line).text.length;
@@ -747,6 +761,10 @@ async function openFileInEditor(args: IdeOpenFileArgs): Promise<void> {
     preserveFocus: args.preserveFocus ?? false,
     selection: new vscode.Selection(position, position)
   });
+
+  if (isTrackedHarmonyOpenInEditorTempPath(resolvedPath)) {
+    trackedHarmonyTempFilePaths.add(resolvedPath);
+  }
 }
 
 function resolvePathAgainstWorkspace(rawPath: string): string | undefined {
@@ -1012,8 +1030,37 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
 </html>`;
 }
 
+function cleanupTrackedHarmonyTempFiles(output?: vscode.OutputChannel): void {
+  let removedCount = 0;
+  let failedCount = 0;
+
+  for (const filePath of trackedHarmonyTempFilePaths) {
+    try {
+      fs.unlinkSync(filePath);
+      removedCount += 1;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOENT") {
+        continue;
+      }
+
+      failedCount += 1;
+      output?.appendLine(`[open-in-editor:cleanup] failed to remove ${filePath}: ${String(error)}`);
+    }
+  }
+
+  trackedHarmonyTempFilePaths.clear();
+
+  if (removedCount > 0 || failedCount > 0) {
+    output?.appendLine(
+      `[open-in-editor:cleanup] removed=${removedCount} failed=${failedCount}`
+    );
+  }
+}
+
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("Harmony");
+  extensionOutputChannel = output;
   const hostInfo = detectHostIdeInfo();
   const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
   output.appendLine(
@@ -1053,15 +1100,19 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(webviewProvider, output, {
     dispose: () => {
+      cleanupTrackedHarmonyTempFiles(output);
       stopBridgeProcess(output);
     }
   });
 }
 
 export function deactivate(): void {
+  cleanupTrackedHarmonyTempFiles(extensionOutputChannel);
+
   if (bridgeProcess && bridgeProcess.exitCode === null) {
     bridgeProcess.kill();
   }
 
   bridgeProcess = undefined;
+  extensionOutputChannel = undefined;
 }

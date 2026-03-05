@@ -39,6 +39,7 @@ export default function App() {
   const [client, setClient] = useState<HarmonyWebSocketClient>();
   const hostBridgeClientRef = useRef<HarmonyHostBridgeClient | null>(null);
   const [canBrowseHdcPath, setCanBrowseHdcPath] = useState(false);
+  const [canOpenInEditor, setCanOpenInEditor] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeMainTab, setActiveMainTab] = useState<MainPanelTabId>(() =>
     readPersistedMainTab(bootstrap.host, DEFAULT_MAIN_PANEL_TAB_ID)
@@ -49,16 +50,22 @@ export default function App() {
     const hostBridge = createHostBridgeClient(window);
     hostBridgeClientRef.current = hostBridge;
     setCanBrowseHdcPath(false);
+    setCanOpenInEditor(false);
 
     let cancelled = false;
-    void hostBridge
-      .getCapabilities()
-      .then((capabilities) => {
+    void Promise.all([
+      hostBridge.getCapabilities().catch(() => null),
+      hostBridge.getHostInfo().catch(() => null)
+    ])
+      .then(([capabilities, hostInfo]) => {
         if (cancelled) {
           return;
         }
 
-        setCanBrowseHdcPath(Boolean(capabilities["ide.openFilePicker"]));
+        setCanBrowseHdcPath(Boolean(capabilities?.["ide.openFilePicker"]));
+        const isVsCodeApiHost =
+          hostInfo?.host === "vscode" || hostInfo?.host === "cursor" || hostInfo?.host === "trae";
+        setCanOpenInEditor(Boolean(capabilities?.["ide.openFile"]) && isVsCodeApiHost);
       })
       .catch(() => {
         if (cancelled) {
@@ -66,6 +73,7 @@ export default function App() {
         }
 
         setCanBrowseHdcPath(false);
+        setCanOpenInEditor(false);
       });
 
     return () => {
@@ -256,6 +264,19 @@ export default function App() {
     []
   );
 
+  const openLocalPathInEditor = useCallback(async (localPath: string): Promise<void> => {
+    const hostBridgeClient = hostBridgeClientRef.current;
+    if (!hostBridgeClient) {
+      throw new Error("IDE host bridge is not available.");
+    }
+
+    await hostBridgeClient.invoke("ide.openFile", {
+      path: localPath,
+      preview: false,
+      preserveFocus: false
+    });
+  }, []);
+
   const mainTabPanels: Record<MainPanelTabId, ReactNode> = {
     hilog: (
       <HilogConsolePanel
@@ -275,6 +296,8 @@ export default function App() {
         hdcAvailable={hdcBinConfig.available}
         selectedDevice={deviceSelection.selectedDevice}
         hostFilePickerAvailable={canBrowseHdcPath}
+        openInEditorAvailable={canOpenInEditor}
+        openLocalPathInEditor={openLocalPathInEditor}
         pickUploadFiles={pickUploadFiles}
         pickDownloadDirectory={pickDownloadDirectory}
       />
