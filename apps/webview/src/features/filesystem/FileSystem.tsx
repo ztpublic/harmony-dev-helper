@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Tree,
   type NodeApi,
@@ -46,6 +46,7 @@ const ROOT_REQUEST_KEY = "__root__";
 const TREE_HEIGHT_DEFAULT = 360;
 const TREE_ROW_HEIGHT = 26;
 const TREE_INDENT = 16;
+const RECENT_EXPANDED_DIRECTORY_PATHS_LIMIT = 10;
 const PATH_NAVIGATION_POLL_INTERVAL_MS = 40;
 const PATH_NAVIGATION_TIMEOUT_MS = 8000;
 
@@ -255,10 +256,45 @@ function joinPath(parent: string, child: string): string {
   return `${parent}/${child}`;
 }
 
+function normalizeRecentExpandedDirectoryPaths(
+  paths: readonly string[],
+  rootPath: string
+): readonly string[] {
+  const normalizedPaths: string[] = [];
+  const seen = new Set<string>();
+
+  for (const rawPath of paths) {
+    const normalizedPath = normalizeAbsolutePath(rawPath);
+    if (!normalizedPath || !isWithinRootPath(normalizedPath, rootPath) || seen.has(normalizedPath)) {
+      continue;
+    }
+
+    seen.add(normalizedPath);
+    normalizedPaths.push(normalizedPath);
+
+    if (normalizedPaths.length >= RECENT_EXPANDED_DIRECTORY_PATHS_LIMIT) {
+      break;
+    }
+  }
+
+  return normalizedPaths;
+}
+
+function addRecentExpandedDirectoryPath(
+  paths: readonly string[],
+  path: string,
+  limit = RECENT_EXPANDED_DIRECTORY_PATHS_LIMIT
+): readonly string[] {
+  const withoutDuplicate = paths.filter((existingPath) => existingPath !== path);
+  return [path, ...withoutDuplicate].slice(0, Math.max(1, limit));
+}
+
 export function FileSystem({
   vfs,
   rootPath = ROOT_PATH_DEFAULT,
   height,
+  recentExpandedDirectoryPaths,
+  onRecentExpandedDirectoryPathsChange,
   onSelectionChange,
   onOpenFile
 }: FileSystemProps) {
@@ -266,12 +302,18 @@ export function FileSystem({
   const [rootLoadState, setRootLoadState] = useState<DirectoryLoadState>("unloaded");
   const [rootErrorMessage, setRootErrorMessage] = useState<string>();
   const normalizedRootPath = normalizeAbsolutePath(rootPath) ?? ROOT_PATH_DEFAULT;
+  const [internalRecentExpandedDirectoryPaths, setInternalRecentExpandedDirectoryPaths] = useState<
+    readonly string[]
+  >([]);
+  const [isRecentDirectoryDropdownOpen, setIsRecentDirectoryDropdownOpen] = useState(false);
   const [pathInputValue, setPathInputValue] = useState(normalizedRootPath);
   const [pathNavigationError, setPathNavigationError] = useState<string>();
   const [isPathNavigationPending, setIsPathNavigationPending] = useState(false);
   const [contextMenu, setContextMenu] = useState<FileSystemContextMenuState | null>(null);
 
+  const pathComboboxRef = useRef<HTMLDivElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
+  const recentExpandedDirectoryPathOptionsRef = useRef<readonly string[]>([]);
   const treeApiRef = useRef<TreeApi<FileSystemNode> | null>(null);
   const treeDataRef = useRef<readonly FileSystemNode[]>([]);
   const rootLoadStateRef = useRef<DirectoryLoadState>("unloaded");
@@ -282,6 +324,52 @@ export function FileSystem({
   const onOpenFileRef = useRef(onOpenFile);
 
   const treeHeight = normalizeTreeHeight(height);
+  const recentExpandedDirectoryPathOptions = useMemo(
+    () =>
+      normalizeRecentExpandedDirectoryPaths(
+        recentExpandedDirectoryPaths ?? internalRecentExpandedDirectoryPaths,
+        normalizedRootPath
+      ),
+    [recentExpandedDirectoryPaths, internalRecentExpandedDirectoryPaths, normalizedRootPath]
+  );
+
+  const updateRecentExpandedDirectoryPaths = useCallback(
+    (nextPaths: readonly string[]) => {
+      const normalizedPaths = normalizeRecentExpandedDirectoryPaths(nextPaths, normalizedRootPath);
+      if (onRecentExpandedDirectoryPathsChange) {
+        onRecentExpandedDirectoryPathsChange(normalizedPaths);
+        return;
+      }
+
+      setInternalRecentExpandedDirectoryPaths(normalizedPaths);
+    },
+    [normalizedRootPath, onRecentExpandedDirectoryPathsChange]
+  );
+
+  useEffect(() => {
+    recentExpandedDirectoryPathOptionsRef.current = recentExpandedDirectoryPathOptions;
+  }, [recentExpandedDirectoryPathOptions]);
+
+  const rememberExpandedDirectoryPath = useCallback(
+    (directoryPath: string) => {
+      const normalizedPath = normalizeAbsolutePath(directoryPath);
+      if (!normalizedPath || !isWithinRootPath(normalizedPath, normalizedRootPath)) {
+        return;
+      }
+
+      const nextPaths = addRecentExpandedDirectoryPath(
+        recentExpandedDirectoryPathOptionsRef.current,
+        normalizedPath
+      );
+      recentExpandedDirectoryPathOptionsRef.current = nextPaths;
+      updateRecentExpandedDirectoryPaths(nextPaths);
+    },
+    [normalizedRootPath, updateRecentExpandedDirectoryPaths]
+  );
+
+  const closeRecentDirectoryDropdown = useCallback(() => {
+    setIsRecentDirectoryDropdownOpen(false);
+  }, []);
 
   useEffect(() => {
     treeDataRef.current = treeData;
@@ -298,7 +386,16 @@ export function FileSystem({
   useEffect(() => {
     setPathInputValue(normalizedRootPath);
     setPathNavigationError(undefined);
-  }, [normalizedRootPath]);
+    closeRecentDirectoryDropdown();
+  }, [closeRecentDirectoryDropdown, normalizedRootPath]);
+
+  useEffect(() => {
+    if (!onRecentExpandedDirectoryPathsChange && recentExpandedDirectoryPaths === undefined) {
+      setInternalRecentExpandedDirectoryPaths((current) =>
+        normalizeRecentExpandedDirectoryPaths(current, normalizedRootPath)
+      );
+    }
+  }, [normalizedRootPath, onRecentExpandedDirectoryPathsChange, recentExpandedDirectoryPaths]);
 
   useEffect(() => {
     onSelectionChangeRef.current = onSelectionChange;
@@ -392,6 +489,37 @@ export function FileSystem({
       window.removeEventListener("resize", closeContextMenu);
     };
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!isRecentDirectoryDropdownOpen) {
+      return;
+    }
+
+    const onMouseDown = (event: MouseEvent) => {
+      const target = event.target as Node | null;
+      if (!target || pathComboboxRef.current?.contains(target)) {
+        return;
+      }
+
+      closeRecentDirectoryDropdown();
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeRecentDirectoryDropdown();
+      }
+    };
+
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", closeRecentDirectoryDropdown);
+
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", closeRecentDirectoryDropdown);
+    };
+  }, [closeRecentDirectoryDropdown, isRecentDirectoryDropdownOpen]);
 
   const loadDirectory = useCallback(
     async (directoryPath: string, options: LoadDirectoryOptions = {}) => {
@@ -569,7 +697,9 @@ export function FileSystem({
       setPathNavigationError(undefined);
       setPathInputValue(targetPath);
       setIsPathNavigationPending(true);
+      closeRecentDirectoryDropdown();
       setContextMenu(null);
+      let lastExpandedDirectoryPath: string | null = null;
 
       try {
         if (rootLoadStateRef.current !== "loaded") {
@@ -616,6 +746,7 @@ export function FileSystem({
             }
 
             await waitForDirectoryLoaded(currentPath, version);
+            lastExpandedDirectoryPath = currentPath;
           } else if (currentNode.kind === "directory") {
             const treeNode = treeApiRef.current?.get(currentPath);
             if (treeNode && !treeNode.isOpen) {
@@ -630,6 +761,7 @@ export function FileSystem({
             }
 
             await waitForDirectoryLoaded(currentPath, version);
+            lastExpandedDirectoryPath = currentPath;
           }
 
           parentPath = currentPath;
@@ -649,13 +781,25 @@ export function FileSystem({
         targetNode.select();
         targetNode.focus();
         void treeApiRef.current?.scrollTo(targetPath);
+
+        if (lastExpandedDirectoryPath) {
+          rememberExpandedDirectoryPath(lastExpandedDirectoryPath);
+        }
       } catch (error) {
         setPathNavigationError(toErrorMessage(error));
       } finally {
         setIsPathNavigationPending(false);
       }
     },
-    [loadDirectory, loadRootDirectory, normalizedRootPath, waitForDirectoryLoaded, waitForRootLoaded]
+    [
+      loadDirectory,
+      loadRootDirectory,
+      normalizedRootPath,
+      closeRecentDirectoryDropdown,
+      rememberExpandedDirectoryPath,
+      waitForDirectoryLoaded,
+      waitForRootLoaded
+    ]
   );
 
   const refresh = useCallback(() => {
@@ -668,13 +812,14 @@ export function FileSystem({
     setPathInputValue(normalizedRootPath);
     setPathNavigationError(undefined);
     setIsPathNavigationPending(false);
+    closeRecentDirectoryDropdown();
     setContextMenu(null);
     onSelectionChangeRef.current?.(null);
     void loadRootDirectory({
       force: true,
       version: nextVersion
     });
-  }, [loadRootDirectory, normalizedRootPath]);
+  }, [closeRecentDirectoryDropdown, loadRootDirectory, normalizedRootPath]);
 
   useEffect(() => {
     refresh();
@@ -693,26 +838,49 @@ export function FileSystem({
 
       const shouldLoad =
         toggledNode.data.loadState === "unloaded" || toggledNode.data.loadState === "error";
+      const directoryPath = toggledNode.data.path;
+      const forceReload = toggledNode.data.loadState === "error";
 
-      if (shouldLoad) {
-        void loadDirectory(toggledNode.data.path, {
-          force: toggledNode.data.loadState === "error"
-        });
+      if (!shouldLoad) {
+        rememberExpandedDirectoryPath(directoryPath);
+        return;
       }
+
+      const version = cacheVersionRef.current;
+      const loadExpandedDirectory = async () => {
+        await loadDirectory(directoryPath, {
+          force: forceReload,
+          version
+        });
+
+        await waitForDirectoryLoaded(directoryPath, version);
+        rememberExpandedDirectoryPath(directoryPath);
+      };
+
+      void loadExpandedDirectory().catch(() => {
+        // Directory errors are surfaced in-row by existing load state handling.
+      });
     },
-    [loadDirectory]
+    [loadDirectory, rememberExpandedDirectoryPath, waitForDirectoryLoaded]
   );
 
   const handleSelect = useCallback(
     (nodes: NodeApi<FileSystemNode>[]) => {
-      const firstSelected = nodes[0];
-      const selectedEntry = firstSelected ? toPublicEntry(firstSelected.data) : null;
-      setPathInputValue(selectedEntry?.path ?? normalizedRootPath);
+      const selectedNode = nodes[0];
+      if (!selectedNode) {
+        // Arborist can emit transient empty selections while toggling folders.
+        // Ignore these so we don't clobber the path input with internal root state.
+        return;
+      }
+
+      const selectedEntry = toPublicEntry(selectedNode.data);
+      setPathInputValue(selectedEntry.path);
       setPathNavigationError(undefined);
+      closeRecentDirectoryDropdown();
       setContextMenu(null);
       onSelectionChangeRef.current?.(selectedEntry);
     },
-    [normalizedRootPath]
+    [closeRecentDirectoryDropdown]
   );
 
   const handleContextMenuCopyPath = useCallback(async () => {
@@ -752,10 +920,11 @@ export function FileSystem({
           }}
           onClick={(event) => {
             event.stopPropagation();
+            closeRecentDirectoryDropdown();
             setContextMenu(null);
             node.select();
 
-            if (node.data.kind === "directory" && event.detail === 1) {
+            if (node.data.kind === "directory") {
               node.toggle();
             }
           }}
@@ -773,6 +942,7 @@ export function FileSystem({
             node.select();
             setPathInputValue(entry.path);
             setPathNavigationError(undefined);
+            closeRecentDirectoryDropdown();
             onSelectionChangeRef.current?.(entry);
             setContextMenu({
               x: event.clientX,
@@ -785,7 +955,7 @@ export function FileSystem({
         </div>
       );
     },
-    []
+    [closeRecentDirectoryDropdown]
   );
 
   const renderNode = useCallback(
@@ -853,28 +1023,89 @@ export function FileSystem({
   return (
     <section className="panel file-system-panel" aria-label="File system">
       <div className="file-system-header">
-        <input
-          type="text"
-          className="file-system-path-input"
-          aria-label="Selected file path"
-          value={pathInputValue}
-          spellCheck={false}
-          autoCapitalize="off"
-          autoCorrect="off"
-          placeholder="Paste a path and press Enter"
-          onChange={(event) => {
-            setPathInputValue(event.target.value);
-            setPathNavigationError(undefined);
-          }}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter") {
-              return;
-            }
+        <div className="file-system-path-combobox" ref={pathComboboxRef}>
+          <input
+            type="text"
+            className="file-system-path-input"
+            aria-label="Selected file path"
+            value={pathInputValue}
+            spellCheck={false}
+            autoCapitalize="off"
+            autoCorrect="off"
+            placeholder="Paste a path and press Enter"
+            onChange={(event) => {
+              setPathInputValue(event.target.value);
+              setPathNavigationError(undefined);
+              closeRecentDirectoryDropdown();
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setIsRecentDirectoryDropdownOpen(true);
+                return;
+              }
 
-            event.preventDefault();
-            void navigateToPath(pathInputValue);
-          }}
-        />
+              if (event.key !== "Enter") {
+                return;
+              }
+
+              event.preventDefault();
+              void navigateToPath(pathInputValue);
+            }}
+          />
+          <button
+            type="button"
+            className="file-system-path-dropdown-trigger"
+            aria-label="Show recent expanded folders"
+            aria-haspopup="listbox"
+            aria-expanded={isRecentDirectoryDropdownOpen}
+            onClick={() => {
+              setIsRecentDirectoryDropdownOpen((current) => !current);
+            }}
+            disabled={isPathNavigationPending}
+          >
+            <svg
+              className={`file-system-path-dropdown-caret ${
+                isRecentDirectoryDropdownOpen ? "file-system-path-dropdown-caret-open" : ""
+              }`}
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+              focusable="false"
+            >
+              <path d="M4.5 6.5L8 10L11.5 6.5" />
+            </svg>
+          </button>
+
+          {isRecentDirectoryDropdownOpen ? (
+            <div className="file-system-path-dropdown" role="listbox" aria-label="Recent expanded folders">
+              {recentExpandedDirectoryPathOptions.length === 0 ? (
+                <div className="file-system-path-dropdown-empty" aria-disabled="true">
+                  No recent folders
+                </div>
+              ) : (
+                recentExpandedDirectoryPathOptions.map((recentPath) => (
+                  <button
+                    key={recentPath}
+                    type="button"
+                    className={`file-system-path-dropdown-item ${
+                      recentPath === pathInputValue ? "file-system-path-dropdown-item-active" : ""
+                    }`}
+                    role="option"
+                    aria-selected={recentPath === pathInputValue}
+                    onClick={() => {
+                      setPathInputValue(recentPath);
+                      setPathNavigationError(undefined);
+                      closeRecentDirectoryDropdown();
+                      void navigateToPath(recentPath);
+                    }}
+                  >
+                    {recentPath}
+                  </button>
+                ))
+              )}
+            </div>
+          ) : null}
+        </div>
 
         <button
           type="button"

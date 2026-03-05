@@ -16,6 +16,8 @@ export interface FileSystemProps {
   vfs: VirtualFileSystem;
   rootPath?: string;
   height?: number;
+  recentExpandedDirectoryPaths?: readonly string[];
+  onRecentExpandedDirectoryPathsChange?: (paths: readonly string[]) => void;
   onSelectionChange?: (entry: VfsEntry | null) => void;
   onOpenFile?: (entry: VfsEntry) => void;
 }

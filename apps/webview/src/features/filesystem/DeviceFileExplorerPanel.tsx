@@ -1,5 +1,5 @@
 import type { ConnectionState, HarmonyWebSocketClient } from "@harmony/webview-bridge";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { FileSystem } from "./FileSystem";
 import { createHdcVirtualFileSystem } from "./hdcVirtualFileSystem";
 
@@ -46,6 +46,9 @@ export function DeviceFileExplorerPanel({
   const [capabilitiesStatus, setCapabilitiesStatus] = useState<CapabilitiesStatus>("idle");
   const [supportsFsList, setSupportsFsList] = useState(false);
   const [capabilityError, setCapabilityError] = useState<string>();
+  const [recentExpandedPathsByDevice, setRecentExpandedPathsByDevice] = useState<
+    Record<string, readonly string[]>
+  >({});
 
   useEffect(() => {
     let cancelled = false;
@@ -99,6 +102,35 @@ export function DeviceFileExplorerPanel({
     });
   }, [client, selectedDevice, supportsFsList]);
 
+  const recentExpandedDirectoryPaths = useMemo(() => {
+    if (!selectedDevice) {
+      return [];
+    }
+
+    return recentExpandedPathsByDevice[selectedDevice] ?? [];
+  }, [recentExpandedPathsByDevice, selectedDevice]);
+
+  const handleRecentExpandedDirectoryPathsChange = useCallback(
+    (paths: readonly string[]) => {
+      if (!selectedDevice) {
+        return;
+      }
+
+      setRecentExpandedPathsByDevice((current) => {
+        const previous = current[selectedDevice] ?? [];
+        if (previous.length === paths.length && previous.every((value, index) => value === paths[index])) {
+          return current;
+        }
+
+        return {
+          ...current,
+          [selectedDevice]: [...paths]
+        };
+      });
+    },
+    [selectedDevice]
+  );
+
   if (connectionState !== "open") {
     return <ExplorerPlaceholder message="Waiting for websocket connection." />;
   }
@@ -136,5 +168,13 @@ export function DeviceFileExplorerPanel({
     return <ExplorerPlaceholder message="File explorer is not ready." />;
   }
 
-  return <FileSystem key={selectedDevice} vfs={vfs} rootPath="/" />;
+  return (
+    <FileSystem
+      key={selectedDevice}
+      vfs={vfs}
+      rootPath="/"
+      recentExpandedDirectoryPaths={recentExpandedDirectoryPaths}
+      onRecentExpandedDirectoryPathsChange={handleRecentExpandedDirectoryPathsChange}
+    />
+  );
 }
