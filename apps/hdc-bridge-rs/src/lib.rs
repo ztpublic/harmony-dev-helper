@@ -25,6 +25,7 @@ const BATCH_INTERVAL_MS: u64 = 40;
 const BATCH_MAX_LINES: usize = 200;
 const BATCH_MAX_BYTES: usize = 64 * 1024;
 const DEFAULT_MCP_PORT_OFFSET: u16 = 100;
+const FS_LIST_EXIT_SENTINEL_PREFIX: &str = "__HARMONY_FS_EXIT:";
 
 static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -49,6 +50,14 @@ struct InvokePayload {
 struct HilogPidOption {
     pid: i64,
     command: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct HdcFsListEntry {
+    path: String,
+    name: String,
+    kind: String,
 }
 
 #[derive(Debug)]
@@ -295,6 +304,112 @@ fn optional_positive_i64_arg(args: &Value, key: &str) -> Result<Option<i64>, Str
     }
 
     Ok(Some(raw))
+}
+
+fn optional_bool_arg(args: &Value, key: &str) -> Result<Option<bool>, String> {
+    let Some(value) = args.get(key) else {
+        return Ok(None);
+    };
+
+    if value.is_null() {
+        return Ok(None);
+    }
+
+    let Some(raw) = value.as_bool() else {
+        return Err(format!("`{key}` must be a boolean when provided"));
+    };
+
+    Ok(Some(raw))
+}
+
+fn required_absolute_path_arg(args: &Value, key: &str) -> Result<String, String> {
+    let path = required_string_arg(args, key)?;
+    if !path.starts_with('/') {
+        return Err(format!("`{key}` must be an absolute path starting with `/`"));
+    }
+
+    if path.contains('\n') || path.contains('\r') {
+        return Err(format!("`{key}` must not contain newline characters"));
+    }
+
+    Ok(path)
+}
+
+fn shell_single_quote(value: &str) -> String {
+    let escaped = value.replace('\'', "'\\''");
+    format!("'{escaped}'")
+}
+
+fn build_fs_list_shell_command(path: &str, include_hidden: bool) -> String {
+    let flags = if include_hidden { "-A1p" } else { "-1p" };
+    let escaped_path = shell_single_quote(path);
+    format!(
+        "ls {flags} -- {escaped_path} 2>&1; echo {FS_LIST_EXIT_SENTINEL_PREFIX}$?"
+    )
+}
+
+fn join_device_path(parent: &str, name: &str) -> String {
+    let trimmed_name = name.trim_start_matches('/');
+    if parent == "/" {
+        return format!("/{trimmed_name}");
+    }
+
+    format!("{}/{}", parent.trim_end_matches('/'), trimmed_name)
+}
+
+fn parse_fs_list_output(parent_path: &str, output: &str) -> Result<Vec<HdcFsListEntry>, String> {
+    let lines = output.lines().collect::<Vec<_>>();
+    let sentinel_index = lines
+        .iter()
+        .rposition(|line| line.trim_end().starts_with(FS_LIST_EXIT_SENTINEL_PREFIX))
+        .ok_or_else(|| "failed to parse filesystem listing result (missing exit sentinel)".to_string())?;
+
+    let sentinel_line = lines[sentinel_index].trim_end();
+    let exit_code_raw = sentinel_line
+        .strip_prefix(FS_LIST_EXIT_SENTINEL_PREFIX)
+        .ok_or_else(|| "failed to parse filesystem listing result (invalid exit sentinel)".to_string())?;
+    let exit_code = exit_code_raw
+        .parse::<i32>()
+        .map_err(|_| "failed to parse filesystem listing result (invalid exit code)".to_string())?;
+
+    let listing_lines = lines[..sentinel_index]
+        .iter()
+        .map(|line| line.trim_end_matches('\r'))
+        .collect::<Vec<_>>();
+
+    if exit_code != 0 {
+        let message = listing_lines.join("\n").trim().to_string();
+        if message.is_empty() {
+            return Err(format!("failed to list `{parent_path}` (exit code {exit_code})"));
+        }
+
+        return Err(message);
+    }
+
+    let mut entries = Vec::new();
+    for line in listing_lines {
+        if line.is_empty() {
+            continue;
+        }
+
+        let (name, kind) = if let Some(name) = line.strip_suffix('/') {
+            (name, "directory")
+        } else {
+            (line, "file")
+        };
+
+        if name.is_empty() || name == "." || name == ".." {
+            continue;
+        }
+
+        entries.push(HdcFsListEntry {
+            path: join_device_path(parent_path, name),
+            name: name.to_string(),
+            kind: kind.to_string(),
+        });
+    }
+
+    Ok(entries)
 }
 
 fn parse_hidumper_processes(output: &str) -> Vec<HilogPidOption> {
@@ -782,6 +897,83 @@ async fn handle_hilog_unsubscribe(
     )
 }
 
+async fn handle_fs_list(id: String, args: Value) -> Envelope {
+    let connect_key = match required_string_arg(&args, "connectKey") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let path = match required_absolute_path_arg(&args, "path") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let include_hidden = match optional_bool_arg(&args, "includeHidden") {
+        Ok(value) => value.unwrap_or(true),
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let client = match build_hdc_client_from_config() {
+        Ok(value) => value,
+        Err(message) => return hdc_bin_error(id, message),
+    };
+
+    let command = build_fs_list_shell_command(&path, include_hidden);
+
+    match client.get_target(connect_key) {
+        Ok(target) => match target.shell(&command).await {
+            Ok(mut session) => match session.read_all_string().await {
+                Ok(output) => {
+                    let _ = session.end().await;
+                    match parse_fs_list_output(&path, &output) {
+                        Ok(entries) => host_message(
+                            id,
+                            "event",
+                            json!({
+                              "name": "hdc.fs.list.result",
+                              "data": {
+                                "entries": entries
+                              }
+                            }),
+                        ),
+                        Err(message) => hdc_error(id, message),
+                    }
+                }
+                Err(error) => hdc_error(id, error.to_string()),
+            },
+            Err(error) => hdc_error(id, error.to_string()),
+        },
+        Err(error) => hdc_error(id, error.to_string()),
+    }
+}
+
 async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) -> Envelope {
     let invoke = match serde_json::from_value::<InvokePayload>(payload) {
         Ok(value) => value,
@@ -809,6 +1001,7 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
                   "hdc.listTargets": true,
                   "hdc.getParameters": true,
                   "hdc.shell": true,
+                  "hdc.fs.list": true,
                   "hdc.getBinConfig": true,
                   "hdc.setBinPath": true,
                   "hdc.hilog.listPids": true,
@@ -968,6 +1161,7 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
             }
         }
         "hdc.hilog.listPids" => handle_hilog_list_pids(id, invoke.args).await,
+        "hdc.fs.list" => handle_fs_list(id, invoke.args).await,
         "hdc.hilog.subscribe" => handle_hilog_subscribe(id, invoke.args, session).await,
         "hdc.hilog.unsubscribe" => handle_hilog_unsubscribe(id, invoke.args, session).await,
         _ => host_message(
@@ -1110,9 +1304,12 @@ pub async fn run_bridge(ws_addr: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        derive_default_mcp_http_addr, format_hilog_entry, kind_to_char, level_to_ansi,
-        level_to_char, optional_positive_i64_arg, optional_string_arg, parse_hidumper_processes,
-        HilogBatcher, HilogPidOption, BATCH_MAX_BYTES, BATCH_MAX_LINES, QUEUE_MAX_LINES,
+        build_fs_list_shell_command, derive_default_mcp_http_addr, format_hilog_entry,
+        join_device_path, kind_to_char, level_to_ansi, level_to_char, optional_bool_arg,
+        optional_positive_i64_arg, optional_string_arg, parse_fs_list_output,
+        parse_hidumper_processes, shell_single_quote, HdcFsListEntry, HilogBatcher,
+        HilogPidOption, BATCH_MAX_BYTES, BATCH_MAX_LINES, FS_LIST_EXIT_SENTINEL_PREFIX,
+        QUEUE_MAX_LINES,
     };
     use hdckit_rs::HilogEntry;
     use serde_json::json;
@@ -1263,6 +1460,114 @@ mod tests {
         let args = json!({ "pid": "123" });
         let error = optional_positive_i64_arg(&args, "pid").expect_err("expected invalid pid");
         assert_eq!(error, "`pid` must be a positive integer when provided");
+    }
+
+    #[test]
+    fn optional_bool_accepts_and_rejects_types() {
+        let args = json!({ "includeHidden": true });
+        let parsed = optional_bool_arg(&args, "includeHidden").expect("valid bool");
+        assert_eq!(parsed, Some(true));
+
+        let args = json!({ "includeHidden": false });
+        let parsed = optional_bool_arg(&args, "includeHidden").expect("valid bool");
+        assert_eq!(parsed, Some(false));
+
+        let args = json!({ "includeHidden": "yes" });
+        let error = optional_bool_arg(&args, "includeHidden").expect_err("invalid bool");
+        assert_eq!(error, "`includeHidden` must be a boolean when provided");
+    }
+
+    #[test]
+    fn shell_single_quote_escapes_single_quotes() {
+        assert_eq!(shell_single_quote("/data/log"), "'/data/log'");
+        assert_eq!(
+            shell_single_quote("/data/it's/log"),
+            "'/data/it'\\''s/log'"
+        );
+    }
+
+    #[test]
+    fn build_fs_list_shell_command_uses_expected_flags() {
+        let hidden_cmd = build_fs_list_shell_command("/data", true);
+        assert!(hidden_cmd.starts_with("ls -A1p -- '/data' 2>&1; echo "));
+        assert!(hidden_cmd.contains(FS_LIST_EXIT_SENTINEL_PREFIX));
+
+        let visible_cmd = build_fs_list_shell_command("/data", false);
+        assert!(visible_cmd.starts_with("ls -1p -- '/data' 2>&1; echo "));
+        assert!(visible_cmd.contains(FS_LIST_EXIT_SENTINEL_PREFIX));
+    }
+
+    #[test]
+    fn join_device_path_handles_root_and_nested_paths() {
+        assert_eq!(join_device_path("/", "system"), "/system");
+        assert_eq!(join_device_path("/data", "local"), "/data/local");
+        assert_eq!(join_device_path("/data/", "local"), "/data/local");
+    }
+
+    #[test]
+    fn parse_fs_list_output_parses_successful_listing() {
+        let output = ".\n..\nlog/\nentry.txt\n.hidden\n__HARMONY_FS_EXIT:0\n";
+        let parsed = parse_fs_list_output("/data", output).expect("valid parse");
+
+        assert_eq!(
+            parsed,
+            vec![
+                HdcFsListEntry {
+                    path: "/data/log".to_string(),
+                    name: "log".to_string(),
+                    kind: "directory".to_string(),
+                },
+                HdcFsListEntry {
+                    path: "/data/entry.txt".to_string(),
+                    name: "entry.txt".to_string(),
+                    kind: "file".to_string(),
+                },
+                HdcFsListEntry {
+                    path: "/data/.hidden".to_string(),
+                    name: ".hidden".to_string(),
+                    kind: "file".to_string(),
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_fs_list_output_handles_root_path_join() {
+        let output = "system/\ninit.cfg\n__HARMONY_FS_EXIT:0\n";
+        let parsed = parse_fs_list_output("/", output).expect("valid parse");
+
+        assert_eq!(
+            parsed,
+            vec![
+                HdcFsListEntry {
+                    path: "/system".to_string(),
+                    name: "system".to_string(),
+                    kind: "directory".to_string(),
+                },
+                HdcFsListEntry {
+                    path: "/init.cfg".to_string(),
+                    name: "init.cfg".to_string(),
+                    kind: "file".to_string(),
+                }
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_fs_list_output_returns_shell_error_message() {
+        let output = "ls: /data/secret: Permission denied\n__HARMONY_FS_EXIT:2\n";
+        let error = parse_fs_list_output("/data/secret", output).expect_err("expected shell error");
+        assert_eq!(error, "ls: /data/secret: Permission denied");
+    }
+
+    #[test]
+    fn parse_fs_list_output_rejects_missing_sentinel() {
+        let output = "system/\ninit.cfg\n";
+        let error = parse_fs_list_output("/", output).expect_err("missing sentinel should fail");
+        assert_eq!(
+            error,
+            "failed to parse filesystem listing result (missing exit sentinel)"
+        );
     }
 
     #[test]

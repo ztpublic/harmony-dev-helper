@@ -35,11 +35,19 @@ type LoadDirectoryOptions = {
   version?: number;
 };
 
+type FileSystemContextMenuState = {
+  x: number;
+  y: number;
+  path: string;
+};
+
 const ROOT_PATH_DEFAULT = "/";
 const ROOT_REQUEST_KEY = "__root__";
 const TREE_HEIGHT_DEFAULT = 360;
 const TREE_ROW_HEIGHT = 26;
 const TREE_INDENT = 16;
+const PATH_NAVIGATION_POLL_INTERVAL_MS = 40;
+const PATH_NAVIGATION_TIMEOUT_MS = 8000;
 
 const NAME_COLLATOR = new Intl.Collator(undefined, {
   sensitivity: "base",
@@ -52,6 +60,52 @@ function toErrorMessage(error: unknown): string {
   }
 
   return String(error);
+}
+
+function fallbackCopyText(text: string): boolean {
+  if (typeof document === "undefined" || !document.body) {
+    return false;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  textarea.style.top = "0";
+  textarea.style.opacity = "0";
+  textarea.style.pointerEvents = "none";
+
+  document.body.appendChild(textarea);
+  textarea.focus();
+  textarea.select();
+
+  let copied = false;
+  try {
+    copied = document.execCommand("copy");
+  } catch {
+    copied = false;
+  }
+
+  document.body.removeChild(textarea);
+  return copied;
+}
+
+async function copyTextToClipboard(text: string): Promise<boolean> {
+  if (!text) {
+    return false;
+  }
+
+  if (typeof navigator !== "undefined" && navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      // fall through to legacy fallback
+    }
+  }
+
+  return fallbackCopyText(text);
 }
 
 function toPublicEntry(node: FileSystemNode): VfsEntry {
@@ -161,6 +215,46 @@ function normalizeTreeHeight(height: number | undefined): number {
   return Math.max(180, Math.floor(height as number));
 }
 
+function normalizeAbsolutePath(path: string): string | null {
+  const trimmed = path.trim();
+  if (!trimmed || !trimmed.startsWith("/")) {
+    return null;
+  }
+
+  const segments = trimmed.split("/").filter((segment) => segment.length > 0);
+  if (segments.length === 0) {
+    return "/";
+  }
+
+  return `/${segments.join("/")}`;
+}
+
+function isWithinRootPath(path: string, rootPath: string): boolean {
+  if (rootPath === "/") {
+    return true;
+  }
+
+  return path === rootPath || path.startsWith(`${rootPath}/`);
+}
+
+function getPathSegmentsRelativeToRoot(path: string, rootPath: string): string[] {
+  if (path === rootPath) {
+    return [];
+  }
+
+  const offset = rootPath === "/" ? 1 : rootPath.length + 1;
+  const relativePath = path.slice(offset);
+  return relativePath.split("/").filter((segment) => segment.length > 0);
+}
+
+function joinPath(parent: string, child: string): string {
+  if (parent === "/") {
+    return `/${child}`;
+  }
+
+  return `${parent}/${child}`;
+}
+
 export function FileSystem({
   vfs,
   rootPath = ROOT_PATH_DEFAULT,
@@ -171,10 +265,17 @@ export function FileSystem({
   const [treeData, setTreeData] = useState<FileSystemNode[]>([]);
   const [rootLoadState, setRootLoadState] = useState<DirectoryLoadState>("unloaded");
   const [rootErrorMessage, setRootErrorMessage] = useState<string>();
+  const normalizedRootPath = normalizeAbsolutePath(rootPath) ?? ROOT_PATH_DEFAULT;
+  const [pathInputValue, setPathInputValue] = useState(normalizedRootPath);
+  const [pathNavigationError, setPathNavigationError] = useState<string>();
+  const [isPathNavigationPending, setIsPathNavigationPending] = useState(false);
+  const [contextMenu, setContextMenu] = useState<FileSystemContextMenuState | null>(null);
 
+  const contextMenuRef = useRef<HTMLDivElement | null>(null);
   const treeApiRef = useRef<TreeApi<FileSystemNode> | null>(null);
   const treeDataRef = useRef<readonly FileSystemNode[]>([]);
   const rootLoadStateRef = useRef<DirectoryLoadState>("unloaded");
+  const rootErrorMessageRef = useRef<string | undefined>(undefined);
   const cacheVersionRef = useRef(0);
   const inFlightRef = useRef(new Set<string>());
   const onSelectionChangeRef = useRef(onSelectionChange);
@@ -191,12 +292,106 @@ export function FileSystem({
   }, [rootLoadState]);
 
   useEffect(() => {
+    rootErrorMessageRef.current = rootErrorMessage;
+  }, [rootErrorMessage]);
+
+  useEffect(() => {
+    setPathInputValue(normalizedRootPath);
+    setPathNavigationError(undefined);
+  }, [normalizedRootPath]);
+
+  useEffect(() => {
     onSelectionChangeRef.current = onSelectionChange;
   }, [onSelectionChange]);
 
   useEffect(() => {
     onOpenFileRef.current = onOpenFile;
   }, [onOpenFile]);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+
+    const menuElement = contextMenuRef.current;
+    if (!menuElement) {
+      return;
+    }
+
+    const bounds = menuElement.getBoundingClientRect();
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+    const margin = 8;
+    let nextX = contextMenu.x;
+    let nextY = contextMenu.y;
+
+    if (nextX + bounds.width + margin > viewportWidth) {
+      nextX = Math.max(margin, viewportWidth - bounds.width - margin);
+    }
+
+    if (nextY + bounds.height + margin > viewportHeight) {
+      nextY = Math.max(margin, viewportHeight - bounds.height - margin);
+    }
+
+    if (nextX === contextMenu.x && nextY === contextMenu.y) {
+      return;
+    }
+
+    setContextMenu((current) => {
+      if (!current) {
+        return current;
+      }
+
+      if (current.x === nextX && current.y === nextY) {
+        return current;
+      }
+
+      return {
+        ...current,
+        x: nextX,
+        y: nextY
+      };
+    });
+  }, [contextMenu]);
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return;
+    }
+
+    const closeContextMenu = () => {
+      setContextMenu(null);
+    };
+
+    const onMouseDown = (event: MouseEvent) => {
+      if (event.button === 2) {
+        return;
+      }
+
+      const target = event.target as Node | null;
+      if (!target || contextMenuRef.current?.contains(target)) {
+        return;
+      }
+
+      closeContextMenu();
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        closeContextMenu();
+      }
+    };
+
+    document.addEventListener("mousedown", onMouseDown);
+    document.addEventListener("keydown", onKeyDown);
+    window.addEventListener("resize", closeContextMenu);
+
+    return () => {
+      document.removeEventListener("mousedown", onMouseDown);
+      document.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("resize", closeContextMenu);
+    };
+  }, [contextMenu]);
 
   const loadDirectory = useCallback(
     async (directoryPath: string, options: LoadDirectoryOptions = {}) => {
@@ -280,7 +475,7 @@ export function FileSystem({
       setRootErrorMessage(undefined);
 
       try {
-        const entries = await vfs.listDirectory(rootPath);
+        const entries = await vfs.listDirectory(normalizedRootPath);
 
         if (cacheVersionRef.current !== version) {
           return;
@@ -300,7 +495,167 @@ export function FileSystem({
         inFlightRef.current.delete(requestKey);
       }
     },
-    [rootPath, vfs]
+    [normalizedRootPath, vfs]
+  );
+
+  const waitForRootLoaded = useCallback(async (version: number) => {
+    const startTime = Date.now();
+
+    while (cacheVersionRef.current === version) {
+      const currentState = rootLoadStateRef.current;
+      if (currentState === "loaded") {
+        return;
+      }
+
+      if (currentState === "error") {
+        throw new Error(rootErrorMessageRef.current ?? "Failed to load root directory.");
+      }
+
+      if (Date.now() - startTime >= PATH_NAVIGATION_TIMEOUT_MS) {
+        throw new Error("Timed out while loading root directory.");
+      }
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, PATH_NAVIGATION_POLL_INTERVAL_MS);
+      });
+    }
+
+    throw new Error("Explorer state changed while navigating to path.");
+  }, []);
+
+  const waitForDirectoryLoaded = useCallback(async (directoryPath: string, version: number) => {
+    const startTime = Date.now();
+
+    while (cacheVersionRef.current === version) {
+      const node = findNodeByPath(treeDataRef.current, directoryPath);
+      if (!node || node.kind !== "directory") {
+        throw new Error(`Path not found: ${directoryPath}`);
+      }
+
+      if (node.loadState === "loaded") {
+        return;
+      }
+
+      if (node.loadState === "error") {
+        throw new Error(node.errorMessage ?? `Failed to load ${directoryPath}`);
+      }
+
+      if (Date.now() - startTime >= PATH_NAVIGATION_TIMEOUT_MS) {
+        throw new Error(`Timed out while loading ${directoryPath}.`);
+      }
+
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, PATH_NAVIGATION_POLL_INTERVAL_MS);
+      });
+    }
+
+    throw new Error("Explorer state changed while navigating to path.");
+  }, []);
+
+  const navigateToPath = useCallback(
+    async (rawPath: string) => {
+      const targetPath = normalizeAbsolutePath(rawPath);
+      if (!targetPath) {
+        setPathNavigationError("Enter an absolute path (for example, `/data`).");
+        return;
+      }
+
+      if (!isWithinRootPath(targetPath, normalizedRootPath)) {
+        setPathNavigationError(`Path must be inside ${normalizedRootPath}.`);
+        return;
+      }
+
+      const version = cacheVersionRef.current;
+      setPathNavigationError(undefined);
+      setPathInputValue(targetPath);
+      setIsPathNavigationPending(true);
+      setContextMenu(null);
+
+      try {
+        if (rootLoadStateRef.current !== "loaded") {
+          await loadRootDirectory({
+            force: rootLoadStateRef.current === "error",
+            version
+          });
+        }
+
+        await waitForRootLoaded(version);
+
+        const segments = getPathSegmentsRelativeToRoot(targetPath, normalizedRootPath);
+        let parentPath = normalizedRootPath;
+
+        for (let index = 0; index < segments.length; index += 1) {
+          const segment = segments[index];
+          if (!segment) {
+            continue;
+          }
+
+          const currentPath = joinPath(parentPath, segment);
+          const isLastSegment = index === segments.length - 1;
+          const currentNode = findNodeByPath(treeDataRef.current, currentPath);
+
+          if (!currentNode) {
+            throw new Error(`Path not found: ${currentPath}`);
+          }
+
+          if (!isLastSegment) {
+            if (currentNode.kind !== "directory") {
+              throw new Error(`Cannot expand through file: ${currentPath}`);
+            }
+
+            const treeNode = treeApiRef.current?.get(currentPath);
+            if (treeNode && !treeNode.isOpen) {
+              treeNode.open();
+            }
+
+            if (currentNode.loadState !== "loaded") {
+              await loadDirectory(currentPath, {
+                force: currentNode.loadState === "error",
+                version
+              });
+            }
+
+            await waitForDirectoryLoaded(currentPath, version);
+          } else if (currentNode.kind === "directory") {
+            const treeNode = treeApiRef.current?.get(currentPath);
+            if (treeNode && !treeNode.isOpen) {
+              treeNode.open();
+            }
+
+            if (currentNode.loadState !== "loaded") {
+              await loadDirectory(currentPath, {
+                force: currentNode.loadState === "error",
+                version
+              });
+            }
+
+            await waitForDirectoryLoaded(currentPath, version);
+          }
+
+          parentPath = currentPath;
+        }
+
+        if (targetPath === normalizedRootPath) {
+          treeApiRef.current?.deselectAll();
+          onSelectionChangeRef.current?.(null);
+          return;
+        }
+
+        const targetNode = treeApiRef.current?.get(targetPath);
+        if (!targetNode) {
+          throw new Error(`Path not found: ${targetPath}`);
+        }
+
+        targetNode.select();
+        targetNode.focus();
+        void treeApiRef.current?.scrollTo(targetPath);
+      } catch (error) {
+        setPathNavigationError(toErrorMessage(error));
+      } finally {
+        setIsPathNavigationPending(false);
+      }
+    },
+    [loadDirectory, loadRootDirectory, normalizedRootPath, waitForDirectoryLoaded, waitForRootLoaded]
   );
 
   const refresh = useCallback(() => {
@@ -310,12 +665,16 @@ export function FileSystem({
     setTreeData([]);
     setRootLoadState("unloaded");
     setRootErrorMessage(undefined);
+    setPathInputValue(normalizedRootPath);
+    setPathNavigationError(undefined);
+    setIsPathNavigationPending(false);
+    setContextMenu(null);
     onSelectionChangeRef.current?.(null);
     void loadRootDirectory({
       force: true,
       version: nextVersion
     });
-  }, [loadRootDirectory]);
+  }, [loadRootDirectory, normalizedRootPath]);
 
   useEffect(() => {
     refresh();
@@ -344,10 +703,33 @@ export function FileSystem({
     [loadDirectory]
   );
 
-  const handleSelect = useCallback((nodes: NodeApi<FileSystemNode>[]) => {
-    const firstSelected = nodes[0];
-    onSelectionChangeRef.current?.(firstSelected ? toPublicEntry(firstSelected.data) : null);
-  }, []);
+  const handleSelect = useCallback(
+    (nodes: NodeApi<FileSystemNode>[]) => {
+      const firstSelected = nodes[0];
+      const selectedEntry = firstSelected ? toPublicEntry(firstSelected.data) : null;
+      setPathInputValue(selectedEntry?.path ?? normalizedRootPath);
+      setPathNavigationError(undefined);
+      setContextMenu(null);
+      onSelectionChangeRef.current?.(selectedEntry);
+    },
+    [normalizedRootPath]
+  );
+
+  const handleContextMenuCopyPath = useCallback(async () => {
+    if (!contextMenu) {
+      return;
+    }
+
+    const copied = await copyTextToClipboard(contextMenu.path);
+    setContextMenu(null);
+
+    if (!copied) {
+      setPathNavigationError("Failed to copy path to clipboard.");
+      return;
+    }
+
+    setPathNavigationError(undefined);
+  }, [contextMenu]);
 
   const renderRow = useCallback(
     ({ node, attrs, innerRef, children }: RowRendererProps<FileSystemNode>) => {
@@ -370,6 +752,7 @@ export function FileSystem({
           }}
           onClick={(event) => {
             event.stopPropagation();
+            setContextMenu(null);
             node.select();
 
             if (node.data.kind === "directory" && event.detail === 1) {
@@ -382,6 +765,20 @@ export function FileSystem({
             if (node.data.kind === "file") {
               onOpenFileRef.current?.(toPublicEntry(node.data));
             }
+          }}
+          onContextMenu={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            const entry = toPublicEntry(node.data);
+            node.select();
+            setPathInputValue(entry.path);
+            setPathNavigationError(undefined);
+            onSelectionChangeRef.current?.(entry);
+            setContextMenu({
+              x: event.clientX,
+              y: event.clientY,
+              path: entry.path
+            });
           }}
         >
           {children}
@@ -453,29 +850,45 @@ export function FileSystem({
     [loadDirectory]
   );
 
-  const rootSummary = rootPath === "/" ? "Root: /" : `Root: ${rootPath}`;
-
   return (
     <section className="panel file-system-panel" aria-label="File system">
       <div className="file-system-header">
-        <div>
-          <p className="kicker">Files</p>
-          <h2>File System</h2>
-        </div>
+        <input
+          type="text"
+          className="file-system-path-input"
+          aria-label="Selected file path"
+          value={pathInputValue}
+          spellCheck={false}
+          autoCapitalize="off"
+          autoCorrect="off"
+          placeholder="Paste a path and press Enter"
+          onChange={(event) => {
+            setPathInputValue(event.target.value);
+            setPathNavigationError(undefined);
+          }}
+          onKeyDown={(event) => {
+            if (event.key !== "Enter") {
+              return;
+            }
+
+            event.preventDefault();
+            void navigateToPath(pathInputValue);
+          }}
+        />
 
         <button
           type="button"
           className="file-system-refresh-button"
           onClick={refresh}
-          disabled={rootLoadState === "loading"}
+          disabled={rootLoadState === "loading" || isPathNavigationPending}
         >
           {rootLoadState === "loading" ? "Refreshing..." : "Refresh"}
         </button>
       </div>
 
-      <p className="file-system-root-path" title={rootPath}>
-        {rootSummary}
-      </p>
+      {pathNavigationError ? (
+        <p className="panel-message panel-message-error">{pathNavigationError}</p>
+      ) : null}
 
       {rootLoadState === "error" ? (
         <div className="file-system-root-error">
@@ -518,6 +931,29 @@ export function FileSystem({
           >
             {renderNode}
           </Tree>
+        </div>
+      ) : null}
+
+      {contextMenu ? (
+        <div
+          ref={contextMenuRef}
+          className="file-system-context-menu"
+          role="menu"
+          style={{
+            left: `${contextMenu.x}px`,
+            top: `${contextMenu.y}px`
+          }}
+        >
+          <button
+            type="button"
+            className="file-system-context-menu-item"
+            role="menuitem"
+            onClick={() => {
+              void handleContextMenuCopyPath();
+            }}
+          >
+            Copy Path
+          </button>
         </div>
       ) : null}
     </section>

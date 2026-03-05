@@ -1,6 +1,7 @@
 import { HarmonyWebSocketClient, type ConnectionState, resolveBootstrap } from "@harmony/webview-bridge";
 import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { MainTabbedPanel } from "./components/MainTabbedPanel";
+import { DeviceFileExplorerPanel } from "./features/filesystem/DeviceFileExplorerPanel";
 import { useHdcBinConfig } from "./features/hdc/useHdcBinConfig";
 import { useHdcDeviceSelection } from "./features/hdc/useHdcDeviceSelection";
 import { HilogConsolePanel } from "./features/hilog/HilogConsolePanel";
@@ -147,6 +148,14 @@ export default function App() {
         active={activeMainTab === "hilog"}
         historyLimit={appSettings.hilogHistoryLimit}
         theme={appSettings.theme}
+      />
+    ),
+    fileExplorer: (
+      <DeviceFileExplorerPanel
+        client={client}
+        connectionState={state}
+        hdcAvailable={hdcBinConfig.available}
+        selectedDevice={deviceSelection.selectedDevice}
       />
     )
   };

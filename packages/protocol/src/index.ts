@@ -18,6 +18,7 @@ export interface HostCapabilities {
   "hdc.listTargets": boolean;
   "hdc.getParameters": boolean;
   "hdc.shell": boolean;
+  "hdc.fs.list": boolean;
   "hdc.getBinConfig": boolean;
   "hdc.setBinPath": boolean;
   "hdc.hilog.listPids": boolean;
@@ -164,6 +165,16 @@ export interface HdcHilogListPidsResult {
   pids: HdcHilogPidOption[];
 }
 
+export interface HdcFsListEntry {
+  path: string;
+  name: string;
+  kind: "directory" | "file";
+}
+
+export interface HdcFsListResult {
+  entries: HdcFsListEntry[];
+}
+
 export interface HdcHilogUnsubscribeResult {
   stopped: boolean;
   subscriptionId?: string;
@@ -190,6 +201,7 @@ export type InvokeAction =
   | "hdc.listTargets"
   | "hdc.getParameters"
   | "hdc.shell"
+  | "hdc.fs.list"
   | "hdc.getBinConfig"
   | "hdc.setBinPath"
   | "hdc.hilog.listPids"
@@ -201,6 +213,7 @@ export interface InvokeArgsByAction {
   "hdc.listTargets": Record<string, never>;
   "hdc.getParameters": { connectKey: string };
   "hdc.shell": { connectKey: string; command: string };
+  "hdc.fs.list": { connectKey: string; path: string; includeHidden?: boolean };
   "hdc.getBinConfig": Record<string, never>;
   "hdc.setBinPath": { binPath: string | null };
   "hdc.hilog.listPids": { connectKey: string };
@@ -213,6 +226,7 @@ export interface InvokeResultByAction {
   "hdc.listTargets": { targets: string[] };
   "hdc.getParameters": { parameters: Record<string, string> };
   "hdc.shell": { output: string };
+  "hdc.fs.list": HdcFsListResult;
   "hdc.getBinConfig": HdcBinConfigResult;
   "hdc.setBinPath": HdcBinConfigResult;
   "hdc.hilog.listPids": HdcHilogListPidsResult;
