@@ -210,6 +210,52 @@ export default function App() {
     return result.paths[0] ?? null;
   }, [hdcBinConfig.customBinPath, hdcBinConfig.resolvedBinPath]);
 
+  const pickUploadFiles = useCallback(
+    async (_targetDirectoryPath: string): Promise<readonly string[] | null> => {
+      const hostBridgeClient = hostBridgeClientRef.current;
+      if (!hostBridgeClient) {
+        return null;
+      }
+
+      const result = await hostBridgeClient.invoke("ide.openFilePicker", {
+        canSelectFiles: true,
+        canSelectFolders: false,
+        canSelectMany: true,
+        title: "Select files to upload"
+      });
+
+      if (result.canceled || result.paths.length === 0) {
+        return null;
+      }
+
+      return result.paths;
+    },
+    []
+  );
+
+  const pickDownloadDirectory = useCallback(
+    async (_sourceFilePath: string): Promise<string | null> => {
+      const hostBridgeClient = hostBridgeClientRef.current;
+      if (!hostBridgeClient) {
+        return null;
+      }
+
+      const result = await hostBridgeClient.invoke("ide.openFilePicker", {
+        canSelectFiles: false,
+        canSelectFolders: true,
+        canSelectMany: false,
+        title: "Select download folder"
+      });
+
+      if (result.canceled || result.paths.length === 0) {
+        return null;
+      }
+
+      return result.paths[0] ?? null;
+    },
+    []
+  );
+
   const mainTabPanels: Record<MainPanelTabId, ReactNode> = {
     hilog: (
       <HilogConsolePanel
@@ -228,6 +274,9 @@ export default function App() {
         connectionState={state}
         hdcAvailable={hdcBinConfig.available}
         selectedDevice={deviceSelection.selectedDevice}
+        hostFilePickerAvailable={canBrowseHdcPath}
+        pickUploadFiles={pickUploadFiles}
+        pickDownloadDirectory={pickDownloadDirectory}
       />
     )
   };

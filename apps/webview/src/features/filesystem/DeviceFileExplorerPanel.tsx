@@ -8,6 +8,9 @@ interface DeviceFileExplorerPanelProps {
   connectionState: ConnectionState;
   hdcAvailable: boolean;
   selectedDevice: string | null;
+  hostFilePickerAvailable: boolean;
+  pickUploadFiles: (targetDirectoryPath: string) => Promise<readonly string[] | null>;
+  pickDownloadDirectory: (sourceFilePath: string) => Promise<string | null>;
 }
 
 type CapabilitiesStatus = "idle" | "loading" | "ready" | "error";
@@ -41,10 +44,15 @@ export function DeviceFileExplorerPanel({
   client,
   connectionState,
   hdcAvailable,
-  selectedDevice
+  selectedDevice,
+  hostFilePickerAvailable,
+  pickUploadFiles,
+  pickDownloadDirectory
 }: DeviceFileExplorerPanelProps) {
   const [capabilitiesStatus, setCapabilitiesStatus] = useState<CapabilitiesStatus>("idle");
   const [supportsFsList, setSupportsFsList] = useState(false);
+  const [supportsFsUpload, setSupportsFsUpload] = useState(false);
+  const [supportsFsDownload, setSupportsFsDownload] = useState(false);
   const [capabilityError, setCapabilityError] = useState<string>();
   const [recentExpandedPathsByDevice, setRecentExpandedPathsByDevice] = useState<
     Record<string, readonly string[]>
@@ -56,6 +64,8 @@ export function DeviceFileExplorerPanel({
     if (!client || connectionState !== "open") {
       setCapabilitiesStatus("idle");
       setSupportsFsList(false);
+      setSupportsFsUpload(false);
+      setSupportsFsDownload(false);
       setCapabilityError(undefined);
       return;
     }
@@ -71,6 +81,8 @@ export function DeviceFileExplorerPanel({
         }
 
         setSupportsFsList(Boolean(result.capabilities["hdc.fs.list"]));
+        setSupportsFsUpload(Boolean(result.capabilities["hdc.fs.upload"]));
+        setSupportsFsDownload(Boolean(result.capabilities["hdc.fs.download"]));
         setCapabilitiesStatus("ready");
       } catch (error) {
         if (cancelled) {
@@ -78,6 +90,8 @@ export function DeviceFileExplorerPanel({
         }
 
         setSupportsFsList(false);
+        setSupportsFsUpload(false);
+        setSupportsFsDownload(false);
         setCapabilitiesStatus("error");
         setCapabilityError(toErrorMessage(error));
       }
@@ -173,6 +187,10 @@ export function DeviceFileExplorerPanel({
       key={selectedDevice}
       vfs={vfs}
       rootPath="/"
+      uploadEnabled={supportsFsUpload && hostFilePickerAvailable}
+      downloadEnabled={supportsFsDownload && hostFilePickerAvailable}
+      pickUploadFiles={pickUploadFiles}
+      pickDownloadDirectory={pickDownloadDirectory}
       recentExpandedDirectoryPaths={recentExpandedDirectoryPaths}
       onRecentExpandedDirectoryPathsChange={handleRecentExpandedDirectoryPathsChange}
     />

@@ -38,7 +38,7 @@ type LoadDirectoryOptions = {
 type FileSystemContextMenuState = {
   x: number;
   y: number;
-  path: string;
+  entry: VfsEntry;
 };
 
 const ROOT_PATH_DEFAULT = "/";
@@ -256,6 +256,20 @@ function joinPath(parent: string, child: string): string {
   return `${parent}/${child}`;
 }
 
+function parentDirectoryPath(path: string): string {
+  const normalized = normalizeAbsolutePath(path);
+  if (!normalized || normalized === "/") {
+    return "/";
+  }
+
+  const segments = normalized.split("/").filter((segment) => segment.length > 0);
+  if (segments.length <= 1) {
+    return "/";
+  }
+
+  return `/${segments.slice(0, -1).join("/")}`;
+}
+
 function normalizeRecentExpandedDirectoryPaths(
   paths: readonly string[],
   rootPath: string
@@ -293,6 +307,10 @@ export function FileSystem({
   vfs,
   rootPath = ROOT_PATH_DEFAULT,
   height,
+  uploadEnabled = false,
+  downloadEnabled = false,
+  pickUploadFiles,
+  pickDownloadDirectory,
   recentExpandedDirectoryPaths,
   onRecentExpandedDirectoryPathsChange,
   onSelectionChange,
@@ -309,6 +327,7 @@ export function FileSystem({
   const [pathInputValue, setPathInputValue] = useState(normalizedRootPath);
   const [pathNavigationError, setPathNavigationError] = useState<string>();
   const [isPathNavigationPending, setIsPathNavigationPending] = useState(false);
+  const [isFileTransferPending, setIsFileTransferPending] = useState(false);
   const [contextMenu, setContextMenu] = useState<FileSystemContextMenuState | null>(null);
 
   const pathComboboxRef = useRef<HTMLDivElement | null>(null);
@@ -812,6 +831,7 @@ export function FileSystem({
     setPathInputValue(normalizedRootPath);
     setPathNavigationError(undefined);
     setIsPathNavigationPending(false);
+    setIsFileTransferPending(false);
     closeRecentDirectoryDropdown();
     setContextMenu(null);
     onSelectionChangeRef.current?.(null);
@@ -888,7 +908,7 @@ export function FileSystem({
       return;
     }
 
-    const copied = await copyTextToClipboard(contextMenu.path);
+    const copied = await copyTextToClipboard(contextMenu.entry.path);
     setContextMenu(null);
 
     if (!copied) {
@@ -898,6 +918,68 @@ export function FileSystem({
 
     setPathNavigationError(undefined);
   }, [contextMenu]);
+
+  const handleContextMenuUpload = useCallback(async () => {
+    if (!contextMenu || !uploadEnabled || !pickUploadFiles) {
+      return;
+    }
+
+    const targetDirectoryPath =
+      contextMenu.entry.kind === "directory"
+        ? contextMenu.entry.path
+        : parentDirectoryPath(contextMenu.entry.path);
+    setContextMenu(null);
+    setPathNavigationError(undefined);
+    setIsFileTransferPending(true);
+
+    try {
+      const localPaths = await pickUploadFiles(targetDirectoryPath);
+      if (!localPaths || localPaths.length === 0) {
+        return;
+      }
+
+      const version = cacheVersionRef.current;
+      for (const localPath of localPaths) {
+        await vfs.uploadFile(localPath, targetDirectoryPath);
+      }
+
+      await loadDirectory(targetDirectoryPath, {
+        force: true,
+        version
+      });
+      await waitForDirectoryLoaded(targetDirectoryPath, version);
+      setPathNavigationError(undefined);
+    } catch (error) {
+      setPathNavigationError(toErrorMessage(error));
+    } finally {
+      setIsFileTransferPending(false);
+    }
+  }, [contextMenu, loadDirectory, pickUploadFiles, uploadEnabled, vfs, waitForDirectoryLoaded]);
+
+  const handleContextMenuDownload = useCallback(async () => {
+    if (!contextMenu || contextMenu.entry.kind !== "file" || !downloadEnabled || !pickDownloadDirectory) {
+      return;
+    }
+
+    const sourceFilePath = contextMenu.entry.path;
+    setContextMenu(null);
+    setPathNavigationError(undefined);
+    setIsFileTransferPending(true);
+
+    try {
+      const localDirectory = await pickDownloadDirectory(sourceFilePath);
+      if (!localDirectory) {
+        return;
+      }
+
+      await vfs.downloadFile(sourceFilePath, localDirectory);
+      setPathNavigationError(undefined);
+    } catch (error) {
+      setPathNavigationError(toErrorMessage(error));
+    } finally {
+      setIsFileTransferPending(false);
+    }
+  }, [contextMenu, downloadEnabled, pickDownloadDirectory, vfs]);
 
   const renderRow = useCallback(
     ({ node, attrs, innerRef, children }: RowRendererProps<FileSystemNode>) => {
@@ -938,6 +1020,10 @@ export function FileSystem({
           onContextMenu={(event) => {
             event.preventDefault();
             event.stopPropagation();
+            if (isFileTransferPending) {
+              return;
+            }
+
             const entry = toPublicEntry(node.data);
             node.select();
             setPathInputValue(entry.path);
@@ -947,7 +1033,7 @@ export function FileSystem({
             setContextMenu({
               x: event.clientX,
               y: event.clientY,
-              path: entry.path
+              entry
             });
           }}
         >
@@ -955,7 +1041,7 @@ export function FileSystem({
         </div>
       );
     },
-    [closeRecentDirectoryDropdown]
+    [closeRecentDirectoryDropdown, isFileTransferPending]
   );
 
   const renderNode = useCallback(
@@ -1020,6 +1106,15 @@ export function FileSystem({
     [loadDirectory]
   );
 
+  const showUploadAction =
+    Boolean(uploadEnabled) &&
+    Boolean(pickUploadFiles) &&
+    Boolean(contextMenu);
+  const showDownloadAction =
+    Boolean(downloadEnabled) &&
+    Boolean(pickDownloadDirectory) &&
+    contextMenu?.entry.kind === "file";
+
   return (
     <section className="panel file-system-panel" aria-label="File system">
       <div className="file-system-header">
@@ -1033,6 +1128,7 @@ export function FileSystem({
             autoCapitalize="off"
             autoCorrect="off"
             placeholder="Paste a path and press Enter"
+            disabled={isFileTransferPending}
             onChange={(event) => {
               setPathInputValue(event.target.value);
               setPathNavigationError(undefined);
@@ -1062,7 +1158,7 @@ export function FileSystem({
             onClick={() => {
               setIsRecentDirectoryDropdownOpen((current) => !current);
             }}
-            disabled={isPathNavigationPending}
+            disabled={isPathNavigationPending || isFileTransferPending}
           >
             <svg
               className={`file-system-path-dropdown-caret ${
@@ -1111,7 +1207,7 @@ export function FileSystem({
           type="button"
           className="file-system-refresh-button"
           onClick={refresh}
-          disabled={rootLoadState === "loading" || isPathNavigationPending}
+          disabled={rootLoadState === "loading" || isPathNavigationPending || isFileTransferPending}
         >
           {rootLoadState === "loading" ? "Refreshing..." : "Refresh"}
         </button>
@@ -1175,6 +1271,32 @@ export function FileSystem({
             top: `${contextMenu.y}px`
           }}
         >
+          {showUploadAction ? (
+            <button
+              type="button"
+              className="file-system-context-menu-item"
+              role="menuitem"
+              onClick={() => {
+                void handleContextMenuUpload();
+              }}
+            >
+              Upload
+            </button>
+          ) : null}
+
+          {showDownloadAction ? (
+            <button
+              type="button"
+              className="file-system-context-menu-item"
+              role="menuitem"
+              onClick={() => {
+                void handleContextMenuDownload();
+              }}
+            >
+              Download
+            </button>
+          ) : null}
+
           <button
             type="button"
             className="file-system-context-menu-item"

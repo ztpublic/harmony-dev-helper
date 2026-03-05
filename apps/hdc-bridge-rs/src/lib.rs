@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -323,16 +324,47 @@ fn optional_bool_arg(args: &Value, key: &str) -> Result<Option<bool>, String> {
 }
 
 fn required_absolute_path_arg(args: &Value, key: &str) -> Result<String, String> {
-    let path = required_string_arg(args, key)?;
+    let raw = args
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("`{key}` must be a non-empty string"))?;
+
+    if raw.contains('\n') || raw.contains('\r') {
+        return Err(format!("`{key}` must not contain newline characters"));
+    }
+
+    let path = raw.trim();
+    if path.is_empty() {
+        return Err(format!("`{key}` must be a non-empty string"));
+    }
+
     if !path.starts_with('/') {
         return Err(format!("`{key}` must be an absolute path starting with `/`"));
     }
 
-    if path.contains('\n') || path.contains('\r') {
+    Ok(path.to_string())
+}
+
+fn required_absolute_local_path_arg(args: &Value, key: &str) -> Result<String, String> {
+    let raw = args
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("`{key}` must be a non-empty string"))?;
+
+    if raw.contains('\n') || raw.contains('\r') {
         return Err(format!("`{key}` must not contain newline characters"));
     }
 
-    Ok(path)
+    let path = raw.trim();
+    if path.is_empty() {
+        return Err(format!("`{key}` must be a non-empty string"));
+    }
+
+    if !Path::new(path).is_absolute() {
+        return Err(format!("`{key}` must be an absolute local filesystem path"));
+    }
+
+    Ok(path.to_string())
 }
 
 fn shell_single_quote(value: &str) -> String {
@@ -355,6 +387,39 @@ fn join_device_path(parent: &str, name: &str) -> String {
     }
 
     format!("{}/{}", parent.trim_end_matches('/'), trimmed_name)
+}
+
+fn local_path_basename(path: &str) -> Option<String> {
+    Path::new(path)
+        .file_name()
+        .map(|value| value.to_string_lossy().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn device_path_basename(path: &str) -> Option<String> {
+    let trimmed = path.trim_end_matches('/');
+    if trimmed.is_empty() || trimmed == "/" {
+        return None;
+    }
+
+    trimmed
+        .rsplit('/')
+        .next()
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && *value != "." && *value != "..")
+        .map(ToString::to_string)
+}
+
+fn build_fs_upload_remote_path(remote_directory: &str, local_path: &str) -> Result<String, String> {
+    let file_name = local_path_basename(local_path)
+        .ok_or_else(|| "`localPath` must include a file name".to_string())?;
+    Ok(join_device_path(remote_directory, &file_name))
+}
+
+fn build_fs_download_local_path(local_directory: &str, remote_path: &str) -> Result<PathBuf, String> {
+    let file_name = device_path_basename(remote_path)
+        .ok_or_else(|| "`remotePath` must include a file name".to_string())?;
+    Ok(Path::new(local_directory).join(file_name))
 }
 
 fn parse_fs_list_output(parent_path: &str, output: &str) -> Result<Vec<HdcFsListEntry>, String> {
@@ -974,6 +1039,166 @@ async fn handle_fs_list(id: String, args: Value) -> Envelope {
     }
 }
 
+async fn handle_fs_upload(id: String, args: Value) -> Envelope {
+    let connect_key = match required_string_arg(&args, "connectKey") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let local_path = match required_absolute_local_path_arg(&args, "localPath") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let remote_directory = match required_absolute_path_arg(&args, "remoteDirectory") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let remote_path = match build_fs_upload_remote_path(&remote_directory, &local_path) {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let client = match build_hdc_client_from_config() {
+        Ok(value) => value,
+        Err(message) => return hdc_bin_error(id, message),
+    };
+
+    match client.get_target(connect_key) {
+        Ok(target) => match target.send_file(Path::new(&local_path), &remote_path).await {
+            Ok(()) => host_message(
+                id,
+                "event",
+                json!({
+                  "name": "hdc.fs.upload.result",
+                  "data": {
+                    "remotePath": remote_path
+                  }
+                }),
+            ),
+            Err(error) => hdc_error(id, error.to_string()),
+        },
+        Err(error) => hdc_error(id, error.to_string()),
+    }
+}
+
+async fn handle_fs_download(id: String, args: Value) -> Envelope {
+    let connect_key = match required_string_arg(&args, "connectKey") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let remote_path = match required_absolute_path_arg(&args, "remotePath") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let local_directory = match required_absolute_local_path_arg(&args, "localDirectory") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let local_path = match build_fs_download_local_path(&local_directory, &remote_path) {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let client = match build_hdc_client_from_config() {
+        Ok(value) => value,
+        Err(message) => return hdc_bin_error(id, message),
+    };
+
+    match client.get_target(connect_key) {
+        Ok(target) => match target.recv_file(&remote_path, &local_path).await {
+            Ok(()) => host_message(
+                id,
+                "event",
+                json!({
+                  "name": "hdc.fs.download.result",
+                  "data": {
+                    "localPath": local_path.to_string_lossy().to_string()
+                  }
+                }),
+            ),
+            Err(error) => hdc_error(id, error.to_string()),
+        },
+        Err(error) => hdc_error(id, error.to_string()),
+    }
+}
+
 async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) -> Envelope {
     let invoke = match serde_json::from_value::<InvokePayload>(payload) {
         Ok(value) => value,
@@ -1002,6 +1227,8 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
                   "hdc.getParameters": true,
                   "hdc.shell": true,
                   "hdc.fs.list": true,
+                  "hdc.fs.upload": true,
+                  "hdc.fs.download": true,
                   "hdc.getBinConfig": true,
                   "hdc.setBinPath": true,
                   "hdc.hilog.listPids": true,
@@ -1162,6 +1389,8 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
         }
         "hdc.hilog.listPids" => handle_hilog_list_pids(id, invoke.args).await,
         "hdc.fs.list" => handle_fs_list(id, invoke.args).await,
+        "hdc.fs.upload" => handle_fs_upload(id, invoke.args).await,
+        "hdc.fs.download" => handle_fs_download(id, invoke.args).await,
         "hdc.hilog.subscribe" => handle_hilog_subscribe(id, invoke.args, session).await,
         "hdc.hilog.unsubscribe" => handle_hilog_unsubscribe(id, invoke.args, session).await,
         _ => host_message(
@@ -1304,15 +1533,17 @@ pub async fn run_bridge(ws_addr: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_fs_list_shell_command, derive_default_mcp_http_addr, format_hilog_entry,
-        join_device_path, kind_to_char, level_to_ansi, level_to_char, optional_bool_arg,
-        optional_positive_i64_arg, optional_string_arg, parse_fs_list_output,
-        parse_hidumper_processes, shell_single_quote, HdcFsListEntry, HilogBatcher,
+        build_fs_download_local_path, build_fs_list_shell_command, build_fs_upload_remote_path,
+        derive_default_mcp_http_addr, format_hilog_entry, join_device_path, kind_to_char,
+        level_to_ansi, level_to_char, optional_bool_arg, optional_positive_i64_arg,
+        optional_string_arg, parse_fs_list_output, parse_hidumper_processes,
+        required_absolute_local_path_arg, shell_single_quote, HdcFsListEntry, HilogBatcher,
         HilogPidOption, BATCH_MAX_BYTES, BATCH_MAX_LINES, FS_LIST_EXIT_SENTINEL_PREFIX,
         QUEUE_MAX_LINES,
     };
     use hdckit_rs::HilogEntry;
     use serde_json::json;
+    use std::path::Path;
     use std::time::{Duration, UNIX_EPOCH};
 
     fn build_entry(message: &str) -> HilogEntry {
@@ -1502,6 +1733,65 @@ mod tests {
         assert_eq!(join_device_path("/", "system"), "/system");
         assert_eq!(join_device_path("/data", "local"), "/data/local");
         assert_eq!(join_device_path("/data/", "local"), "/data/local");
+    }
+
+    #[test]
+    fn required_absolute_local_path_arg_validates_input() {
+        let absolute_path = std::env::current_dir()
+            .expect("cwd should resolve")
+            .join("logs")
+            .display()
+            .to_string();
+
+        let args = json!({ "localPath": absolute_path });
+        let parsed =
+            required_absolute_local_path_arg(&args, "localPath").expect("expected valid absolute path");
+        assert_eq!(
+            parsed,
+            std::env::current_dir()
+                .expect("cwd should resolve")
+                .join("logs")
+                .display()
+                .to_string()
+        );
+
+        let args = json!({ "localPath": "relative/file.txt" });
+        let error = required_absolute_local_path_arg(&args, "localPath")
+            .expect_err("relative local path must fail");
+        assert_eq!(error, "`localPath` must be an absolute local filesystem path");
+
+        let args = json!({ "localPath": format!("{absolute_path}\n") });
+        let error = required_absolute_local_path_arg(&args, "localPath")
+            .expect_err("path with newline must fail");
+        assert_eq!(error, "`localPath` must not contain newline characters");
+    }
+
+    #[test]
+    fn build_fs_upload_remote_path_uses_local_basename() {
+        let remote_path = build_fs_upload_remote_path("/data/log", "/Users/demo/output.log")
+            .expect("upload remote path should resolve");
+        assert_eq!(remote_path, "/data/log/output.log");
+    }
+
+    #[test]
+    fn build_fs_upload_remote_path_rejects_missing_local_basename() {
+        let error = build_fs_upload_remote_path("/data/log", "/")
+            .expect_err("missing basename should fail");
+        assert_eq!(error, "`localPath` must include a file name");
+    }
+
+    #[test]
+    fn build_fs_download_local_path_uses_remote_basename() {
+        let local_path = build_fs_download_local_path("/tmp/downloads", "/data/log/hilog.log")
+            .expect("download local path should resolve");
+        assert_eq!(local_path, Path::new("/tmp/downloads").join("hilog.log"));
+    }
+
+    #[test]
+    fn build_fs_download_local_path_rejects_missing_remote_basename() {
+        let error = build_fs_download_local_path("/tmp/downloads", "/")
+            .expect_err("remote path without basename should fail");
+        assert_eq!(error, "`remotePath` must include a file name");
     }
 
     #[test]

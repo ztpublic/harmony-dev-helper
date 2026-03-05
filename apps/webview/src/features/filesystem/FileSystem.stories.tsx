@@ -48,6 +48,17 @@ function createMockVirtualFileSystem({
       }
 
       return entries.map((entry) => ({ ...entry }));
+    },
+    async uploadFile(localPath: string, remoteDirectory: string): Promise<{ remotePath: string }> {
+      return {
+        remotePath: `${remoteDirectory.replace(/\/$/, "")}/${localPath.split(/[\\/]/).pop() ?? "file"}`
+      };
+    },
+    async downloadFile(remotePath: string, localDirectory: string): Promise<{ localPath: string }> {
+      const fileName = remotePath.split("/").filter(Boolean).pop() ?? "downloaded.file";
+      return {
+        localPath: `${localDirectory.replace(/[\\/]+$/, "")}/${fileName}`
+      };
     }
   };
 }

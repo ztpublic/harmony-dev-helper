@@ -29,7 +29,7 @@ Implemented today:
   - absolute-path navigation
   - refresh/retry flows
   - recent expanded folders
-  - copy-path context menu
+  - right-click actions: copy path, upload to folder, download file
 - Settings dialog for:
   - custom HDC binary path (manual input + host picker when supported)
   - Hilog history limit
@@ -194,6 +194,8 @@ Supported invoke actions:
 - `hdc.getParameters`
 - `hdc.shell`
 - `hdc.fs.list`
+- `hdc.fs.upload`
+- `hdc.fs.download`
 - `hdc.getBinConfig`
 - `hdc.setBinPath`
 - `hdc.hilog.listPids`
@@ -202,6 +204,8 @@ Supported invoke actions:
 
 Selected action args:
 - `hdc.fs.list`: `{ connectKey, path, includeHidden? }` (`path` must be absolute device path)
+- `hdc.fs.upload`: `{ connectKey, localPath, remoteDirectory }`
+- `hdc.fs.download`: `{ connectKey, remotePath, localDirectory }`
 - `hdc.hilog.subscribe`: `{ connectKey, level?, pid? }`
 - `hdc.hilog.unsubscribe`: `{ subscriptionId? }`
 
