@@ -368,16 +368,17 @@ export function FileSystem({
           onClick={(event) => {
             event.stopPropagation();
             node.select();
+
+            if (node.data.kind === "directory" && event.detail === 1) {
+              node.toggle();
+            }
           }}
           onDoubleClick={(event) => {
             event.stopPropagation();
 
-            if (node.data.kind === "directory") {
-              node.toggle();
-              return;
+            if (node.data.kind === "file") {
+              onOpenFileRef.current?.(toPublicEntry(node.data));
             }
-
-            onOpenFileRef.current?.(toPublicEntry(node.data));
           }}
         >
           {children}
@@ -404,7 +405,14 @@ export function FileSystem({
                 node.toggle();
               }}
             >
-              {node.isOpen ? "▾" : "▸"}
+              <svg
+                className={`file-system-expander-icon ${node.isOpen ? "file-system-expander-icon-open" : ""}`}
+                viewBox="0 0 16 16"
+                aria-hidden="true"
+                focusable="false"
+              >
+                <path d="M6 4.5L10 8L6 11.5" />
+              </svg>
             </button>
           ) : (
             <span className="file-system-expander-placeholder" aria-hidden="true" />

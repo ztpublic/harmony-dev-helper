@@ -1060,9 +1060,9 @@ header,
 
 .file-system-expander,
 .file-system-expander-placeholder {
-  width: calc(14px * var(--control-scale));
-  height: calc(14px * var(--control-scale));
-  flex: 0 0 calc(14px * var(--control-scale));
+  width: calc(20px * var(--control-scale));
+  height: calc(20px * var(--control-scale));
+  flex: 0 0 calc(20px * var(--control-scale));
 }
 
 .file-system-expander {
@@ -1071,12 +1071,33 @@ header,
   padding: 0;
   background: transparent;
   color: var(--text-secondary);
-  font-size: calc(0.72rem * var(--control-font-scale));
   line-height: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .file-system-expander:hover {
   background: var(--surface-control-hover);
+}
+
+.file-system-expander-icon {
+  width: calc(14px * var(--control-scale));
+  height: calc(14px * var(--control-scale));
+  transform-origin: 50% 50%;
+  transition: transform 120ms ease;
+}
+
+.file-system-expander-icon-open {
+  transform: rotate(90deg);
+}
+
+.file-system-expander-icon path {
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .file-system-kind-dot {
