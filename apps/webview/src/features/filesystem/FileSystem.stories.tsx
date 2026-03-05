@@ -59,6 +59,11 @@ function createMockVirtualFileSystem({
       return {
         localPath: `${localDirectory.replace(/[\\/]+$/, "")}/${fileName}`
       };
+    },
+    async deletePath(path: string): Promise<{ deletedPath: string }> {
+      return {
+        deletedPath: path
+      };
     }
   };
 }

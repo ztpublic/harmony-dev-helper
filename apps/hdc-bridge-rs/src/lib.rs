@@ -27,6 +27,7 @@ const BATCH_MAX_LINES: usize = 200;
 const BATCH_MAX_BYTES: usize = 64 * 1024;
 const DEFAULT_MCP_PORT_OFFSET: u16 = 100;
 const FS_LIST_EXIT_SENTINEL_PREFIX: &str = "__HARMONY_FS_EXIT:";
+const FS_DELETE_EXIT_SENTINEL_PREFIX: &str = "__HARMONY_FS_DELETE_EXIT:";
 
 static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -380,6 +381,11 @@ fn build_fs_list_shell_command(path: &str, include_hidden: bool) -> String {
     )
 }
 
+fn build_fs_delete_shell_command(path: &str) -> String {
+    let escaped_path = shell_single_quote(path);
+    format!("rm -rf -- {escaped_path} 2>&1; echo {FS_DELETE_EXIT_SENTINEL_PREFIX}$?")
+}
+
 fn join_device_path(parent: &str, name: &str) -> String {
     let trimmed_name = name.trim_start_matches('/');
     if parent == "/" {
@@ -475,6 +481,38 @@ fn parse_fs_list_output(parent_path: &str, output: &str) -> Result<Vec<HdcFsList
     }
 
     Ok(entries)
+}
+
+fn parse_fs_delete_output(target_path: &str, output: &str) -> Result<(), String> {
+    let lines = output.lines().collect::<Vec<_>>();
+    let sentinel_index = lines
+        .iter()
+        .rposition(|line| line.trim_end().starts_with(FS_DELETE_EXIT_SENTINEL_PREFIX))
+        .ok_or_else(|| "failed to parse filesystem delete result (missing exit sentinel)".to_string())?;
+
+    let sentinel_line = lines[sentinel_index].trim_end();
+    let exit_code_raw = sentinel_line
+        .strip_prefix(FS_DELETE_EXIT_SENTINEL_PREFIX)
+        .ok_or_else(|| "failed to parse filesystem delete result (invalid exit sentinel)".to_string())?;
+    let exit_code = exit_code_raw
+        .parse::<i32>()
+        .map_err(|_| "failed to parse filesystem delete result (invalid exit code)".to_string())?;
+
+    let shell_lines = lines[..sentinel_index]
+        .iter()
+        .map(|line| line.trim_end_matches('\r'))
+        .collect::<Vec<_>>();
+
+    if exit_code != 0 {
+        let message = shell_lines.join("\n").trim().to_string();
+        if message.is_empty() {
+            return Err(format!("failed to delete `{target_path}` (exit code {exit_code})"));
+        }
+
+        return Err(message);
+    }
+
+    Ok(())
 }
 
 fn parse_hidumper_processes(output: &str) -> Vec<HilogPidOption> {
@@ -1199,6 +1237,80 @@ async fn handle_fs_download(id: String, args: Value) -> Envelope {
     }
 }
 
+async fn handle_fs_delete(id: String, args: Value) -> Envelope {
+    let connect_key = match required_string_arg(&args, "connectKey") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    let path = match required_absolute_path_arg(&args, "path") {
+        Ok(value) => value,
+        Err(message) => {
+            return host_message(
+                id,
+                "error",
+                json!({
+                  "code": "INVALID_ARGS",
+                  "message": message
+                }),
+            )
+        }
+    };
+
+    if path == "/" {
+        return host_message(
+            id,
+            "error",
+            json!({
+              "code": "INVALID_ARGS",
+              "message": "`path` must not be root (`/`)"
+            }),
+        );
+    }
+
+    let client = match build_hdc_client_from_config() {
+        Ok(value) => value,
+        Err(message) => return hdc_bin_error(id, message),
+    };
+
+    let command = build_fs_delete_shell_command(&path);
+
+    match client.get_target(connect_key) {
+        Ok(target) => match target.shell(&command).await {
+            Ok(mut session) => match session.read_all_string().await {
+                Ok(output) => {
+                    let _ = session.end().await;
+                    match parse_fs_delete_output(&path, &output) {
+                        Ok(()) => host_message(
+                            id,
+                            "event",
+                            json!({
+                              "name": "hdc.fs.delete.result",
+                              "data": {
+                                "deletedPath": path
+                              }
+                            }),
+                        ),
+                        Err(message) => hdc_error(id, message),
+                    }
+                }
+                Err(error) => hdc_error(id, error.to_string()),
+            },
+            Err(error) => hdc_error(id, error.to_string()),
+        },
+        Err(error) => hdc_error(id, error.to_string()),
+    }
+}
+
 async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) -> Envelope {
     let invoke = match serde_json::from_value::<InvokePayload>(payload) {
         Ok(value) => value,
@@ -1229,6 +1341,7 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
                   "hdc.fs.list": true,
                   "hdc.fs.upload": true,
                   "hdc.fs.download": true,
+                  "hdc.fs.delete": true,
                   "hdc.getBinConfig": true,
                   "hdc.setBinPath": true,
                   "hdc.hilog.listPids": true,
@@ -1391,6 +1504,7 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
         "hdc.fs.list" => handle_fs_list(id, invoke.args).await,
         "hdc.fs.upload" => handle_fs_upload(id, invoke.args).await,
         "hdc.fs.download" => handle_fs_download(id, invoke.args).await,
+        "hdc.fs.delete" => handle_fs_delete(id, invoke.args).await,
         "hdc.hilog.subscribe" => handle_hilog_subscribe(id, invoke.args, session).await,
         "hdc.hilog.unsubscribe" => handle_hilog_unsubscribe(id, invoke.args, session).await,
         _ => host_message(
@@ -1533,12 +1647,13 @@ pub async fn run_bridge(ws_addr: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_fs_download_local_path, build_fs_list_shell_command, build_fs_upload_remote_path,
-        derive_default_mcp_http_addr, format_hilog_entry, join_device_path, kind_to_char,
-        level_to_ansi, level_to_char, optional_bool_arg, optional_positive_i64_arg,
-        optional_string_arg, parse_fs_list_output, parse_hidumper_processes,
-        required_absolute_local_path_arg, shell_single_quote, HdcFsListEntry, HilogBatcher,
-        HilogPidOption, BATCH_MAX_BYTES, BATCH_MAX_LINES, FS_LIST_EXIT_SENTINEL_PREFIX,
+        build_fs_delete_shell_command, build_fs_download_local_path, build_fs_list_shell_command,
+        build_fs_upload_remote_path, derive_default_mcp_http_addr, format_hilog_entry,
+        join_device_path, kind_to_char, level_to_ansi, level_to_char, optional_bool_arg,
+        optional_positive_i64_arg, optional_string_arg, parse_fs_delete_output,
+        parse_fs_list_output, parse_hidumper_processes, required_absolute_local_path_arg,
+        shell_single_quote, HdcFsListEntry, HilogBatcher, HilogPidOption, BATCH_MAX_BYTES,
+        BATCH_MAX_LINES, FS_DELETE_EXIT_SENTINEL_PREFIX, FS_LIST_EXIT_SENTINEL_PREFIX,
         QUEUE_MAX_LINES,
     };
     use hdckit_rs::HilogEntry;
@@ -1729,6 +1844,13 @@ mod tests {
     }
 
     #[test]
+    fn build_fs_delete_shell_command_contains_sentinel() {
+        let cmd = build_fs_delete_shell_command("/data/log.txt");
+        assert!(cmd.starts_with("rm -rf -- '/data/log.txt' 2>&1; echo "));
+        assert!(cmd.contains(FS_DELETE_EXIT_SENTINEL_PREFIX));
+    }
+
+    #[test]
     fn join_device_path_handles_root_and_nested_paths() {
         assert_eq!(join_device_path("/", "system"), "/system");
         assert_eq!(join_device_path("/data", "local"), "/data/local");
@@ -1857,6 +1979,31 @@ mod tests {
         assert_eq!(
             error,
             "failed to parse filesystem listing result (missing exit sentinel)"
+        );
+    }
+
+    #[test]
+    fn parse_fs_delete_output_accepts_success() {
+        let output = "__HARMONY_FS_DELETE_EXIT:0\n";
+        let parsed = parse_fs_delete_output("/data/log.txt", output);
+        assert!(parsed.is_ok());
+    }
+
+    #[test]
+    fn parse_fs_delete_output_returns_shell_error_message() {
+        let output = "rm: cannot remove '/data/nope': No such file or directory\n__HARMONY_FS_DELETE_EXIT:1\n";
+        let error = parse_fs_delete_output("/data/nope", output).expect_err("expected delete error");
+        assert_eq!(error, "rm: cannot remove '/data/nope': No such file or directory");
+    }
+
+    #[test]
+    fn parse_fs_delete_output_rejects_missing_sentinel() {
+        let output = "rm: output without sentinel\n";
+        let error = parse_fs_delete_output("/data/nope", output)
+            .expect_err("missing sentinel should fail");
+        assert_eq!(
+            error,
+            "failed to parse filesystem delete result (missing exit sentinel)"
         );
     }
 

@@ -21,6 +21,7 @@ export interface HostCapabilities {
   "hdc.fs.list": boolean;
   "hdc.fs.upload": boolean;
   "hdc.fs.download": boolean;
+  "hdc.fs.delete": boolean;
   "hdc.getBinConfig": boolean;
   "hdc.setBinPath": boolean;
   "hdc.hilog.listPids": boolean;
@@ -198,6 +199,10 @@ export interface HdcFsDownloadResult {
   localPath: string;
 }
 
+export interface HdcFsDeleteResult {
+  deletedPath: string;
+}
+
 export interface HdcHilogUnsubscribeResult {
   stopped: boolean;
   subscriptionId?: string;
@@ -227,6 +232,7 @@ export type InvokeAction =
   | "hdc.fs.list"
   | "hdc.fs.upload"
   | "hdc.fs.download"
+  | "hdc.fs.delete"
   | "hdc.getBinConfig"
   | "hdc.setBinPath"
   | "hdc.hilog.listPids"
@@ -241,6 +247,7 @@ export interface InvokeArgsByAction {
   "hdc.fs.list": { connectKey: string; path: string; includeHidden?: boolean };
   "hdc.fs.upload": { connectKey: string; localPath: string; remoteDirectory: string };
   "hdc.fs.download": { connectKey: string; remotePath: string; localDirectory: string };
+  "hdc.fs.delete": { connectKey: string; path: string };
   "hdc.getBinConfig": Record<string, never>;
   "hdc.setBinPath": { binPath: string | null };
   "hdc.hilog.listPids": { connectKey: string };
@@ -256,6 +263,7 @@ export interface InvokeResultByAction {
   "hdc.fs.list": HdcFsListResult;
   "hdc.fs.upload": HdcFsUploadResult;
   "hdc.fs.download": HdcFsDownloadResult;
+  "hdc.fs.delete": HdcFsDeleteResult;
   "hdc.getBinConfig": HdcBinConfigResult;
   "hdc.setBinPath": HdcBinConfigResult;
   "hdc.hilog.listPids": HdcHilogListPidsResult;

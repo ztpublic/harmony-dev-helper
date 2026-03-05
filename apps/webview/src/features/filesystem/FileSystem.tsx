@@ -41,6 +41,10 @@ type FileSystemContextMenuState = {
   entry: VfsEntry;
 };
 
+type DeleteDialogState = {
+  entry: VfsEntry;
+};
+
 const ROOT_PATH_DEFAULT = "/";
 const ROOT_REQUEST_KEY = "__root__";
 const TREE_HEIGHT_DEFAULT = 360;
@@ -309,6 +313,7 @@ export function FileSystem({
   height,
   uploadEnabled = false,
   downloadEnabled = false,
+  deleteEnabled = false,
   pickUploadFiles,
   pickDownloadDirectory,
   recentExpandedDirectoryPaths,
@@ -329,6 +334,7 @@ export function FileSystem({
   const [isPathNavigationPending, setIsPathNavigationPending] = useState(false);
   const [isFileTransferPending, setIsFileTransferPending] = useState(false);
   const [contextMenu, setContextMenu] = useState<FileSystemContextMenuState | null>(null);
+  const [deleteDialog, setDeleteDialog] = useState<DeleteDialogState | null>(null);
 
   const pathComboboxRef = useRef<HTMLDivElement | null>(null);
   const contextMenuRef = useRef<HTMLDivElement | null>(null);
@@ -469,6 +475,23 @@ export function FileSystem({
       };
     });
   }, [contextMenu]);
+
+  useEffect(() => {
+    if (!deleteDialog) {
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setDeleteDialog(null);
+      }
+    };
+
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [deleteDialog]);
 
   useEffect(() => {
     if (!contextMenu) {
@@ -834,6 +857,7 @@ export function FileSystem({
     setIsFileTransferPending(false);
     closeRecentDirectoryDropdown();
     setContextMenu(null);
+    setDeleteDialog(null);
     onSelectionChangeRef.current?.(null);
     void loadRootDirectory({
       force: true,
@@ -981,6 +1005,67 @@ export function FileSystem({
     }
   }, [contextMenu, downloadEnabled, pickDownloadDirectory, vfs]);
 
+  const reloadDirectoryAtPath = useCallback(
+    async (directoryPath: string) => {
+      const version = cacheVersionRef.current;
+      if (directoryPath === normalizedRootPath) {
+        await loadRootDirectory({
+          force: true,
+          version
+        });
+        await waitForRootLoaded(version);
+        return;
+      }
+
+      await loadDirectory(directoryPath, {
+        force: true,
+        version
+      });
+      await waitForDirectoryLoaded(directoryPath, version);
+    },
+    [loadDirectory, loadRootDirectory, normalizedRootPath, waitForDirectoryLoaded, waitForRootLoaded]
+  );
+
+  const handleContextMenuDeleteRequest = useCallback(() => {
+    if (!contextMenu || !deleteEnabled) {
+      return;
+    }
+
+    setContextMenu(null);
+    setDeleteDialog({
+      entry: contextMenu.entry
+    });
+  }, [contextMenu, deleteEnabled]);
+
+  const handleDeleteDialogCancel = useCallback(() => {
+    setDeleteDialog(null);
+  }, []);
+
+  const handleDeleteDialogConfirm = useCallback(async () => {
+    if (!deleteDialog) {
+      return;
+    }
+
+    const targetEntry = deleteDialog.entry;
+    const parentPath = parentDirectoryPath(targetEntry.path);
+    setDeleteDialog(null);
+    setContextMenu(null);
+    setPathNavigationError(undefined);
+    setIsFileTransferPending(true);
+
+    try {
+      await vfs.deletePath(targetEntry.path);
+      await reloadDirectoryAtPath(parentPath);
+      setPathInputValue(parentPath);
+      onSelectionChangeRef.current?.(null);
+      setPathNavigationError(undefined);
+    } catch (error) {
+      setPathNavigationError(toErrorMessage(error));
+    } finally {
+      setIsFileTransferPending(false);
+    }
+  }, [deleteDialog, reloadDirectoryAtPath, vfs]);
+
   const renderRow = useCallback(
     ({ node, attrs, innerRef, children }: RowRendererProps<FileSystemNode>) => {
       const className = [
@@ -1004,6 +1089,7 @@ export function FileSystem({
             event.stopPropagation();
             closeRecentDirectoryDropdown();
             setContextMenu(null);
+            setDeleteDialog(null);
             node.select();
 
             if (node.data.kind === "directory") {
@@ -1020,7 +1106,7 @@ export function FileSystem({
           onContextMenu={(event) => {
             event.preventDefault();
             event.stopPropagation();
-            if (isFileTransferPending) {
+            if (isFileTransferPending || deleteDialog) {
               return;
             }
 
@@ -1041,7 +1127,7 @@ export function FileSystem({
         </div>
       );
     },
-    [closeRecentDirectoryDropdown, isFileTransferPending]
+    [closeRecentDirectoryDropdown, deleteDialog, isFileTransferPending]
   );
 
   const renderNode = useCallback(
@@ -1114,6 +1200,8 @@ export function FileSystem({
     Boolean(downloadEnabled) &&
     Boolean(pickDownloadDirectory) &&
     contextMenu?.entry.kind === "file";
+  const showDeleteAction = Boolean(deleteEnabled) && Boolean(contextMenu);
+  const deleteDialogEntryLabel = deleteDialog?.entry.name || deleteDialog?.entry.path || "";
 
   return (
     <section className="panel file-system-panel" aria-label="File system">
@@ -1128,7 +1216,7 @@ export function FileSystem({
             autoCapitalize="off"
             autoCorrect="off"
             placeholder="Paste a path and press Enter"
-            disabled={isFileTransferPending}
+            disabled={isFileTransferPending || Boolean(deleteDialog)}
             onChange={(event) => {
               setPathInputValue(event.target.value);
               setPathNavigationError(undefined);
@@ -1158,7 +1246,7 @@ export function FileSystem({
             onClick={() => {
               setIsRecentDirectoryDropdownOpen((current) => !current);
             }}
-            disabled={isPathNavigationPending || isFileTransferPending}
+            disabled={isPathNavigationPending || isFileTransferPending || Boolean(deleteDialog)}
           >
             <svg
               className={`file-system-path-dropdown-caret ${
@@ -1207,7 +1295,12 @@ export function FileSystem({
           type="button"
           className="file-system-refresh-button"
           onClick={refresh}
-          disabled={rootLoadState === "loading" || isPathNavigationPending || isFileTransferPending}
+          disabled={
+            rootLoadState === "loading" ||
+            isPathNavigationPending ||
+            isFileTransferPending ||
+            Boolean(deleteDialog)
+          }
         >
           {rootLoadState === "loading" ? "Refreshing..." : "Refresh"}
         </button>
@@ -1297,6 +1390,17 @@ export function FileSystem({
             </button>
           ) : null}
 
+          {showDeleteAction ? (
+            <button
+              type="button"
+              className="file-system-context-menu-item file-system-context-menu-item-danger"
+              role="menuitem"
+              onClick={handleContextMenuDeleteRequest}
+            >
+              Delete
+            </button>
+          ) : null}
+
           <button
             type="button"
             className="file-system-context-menu-item"
@@ -1307,6 +1411,47 @@ export function FileSystem({
           >
             Copy Path
           </button>
+        </div>
+      ) : null}
+
+      {deleteDialog ? (
+        <div className="file-system-delete-dialog-backdrop" role="presentation">
+          <div
+            className="file-system-delete-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="file-system-delete-dialog-title"
+          >
+            <h3 id="file-system-delete-dialog-title" className="file-system-delete-dialog-title">
+              Delete {deleteDialog.entry.kind === "directory" ? "folder" : "file"}?
+            </h3>
+            <p className="file-system-delete-dialog-message">
+              This action cannot be undone.
+            </p>
+            <p className="file-system-delete-dialog-path" title={deleteDialog.entry.path}>
+              {deleteDialogEntryLabel}
+            </p>
+            <div className="file-system-delete-dialog-actions">
+              <button
+                type="button"
+                className="file-system-delete-dialog-cancel"
+                onClick={handleDeleteDialogCancel}
+                disabled={isFileTransferPending}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="file-system-delete-dialog-confirm"
+                onClick={() => {
+                  void handleDeleteDialogConfirm();
+                }}
+                disabled={isFileTransferPending}
+              >
+                {isFileTransferPending ? "Deleting..." : "Delete"}
+              </button>
+            </div>
+          </div>
         </div>
       ) : null}
     </section>

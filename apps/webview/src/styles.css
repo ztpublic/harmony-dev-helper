@@ -1307,6 +1307,97 @@ header,
   background: var(--surface-control-hover);
 }
 
+.file-system-context-menu-item-danger {
+  color: var(--error-text);
+}
+
+.file-system-context-menu-item-danger:hover {
+  background: color-mix(in srgb, var(--error-text) 14%, transparent);
+}
+
+.file-system-delete-dialog-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1100;
+  background: color-mix(in srgb, #000 36%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+
+.file-system-delete-dialog {
+  width: min(420px, 100%);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  background: var(--surface-panel);
+  box-shadow: var(--shadow-dialog);
+  padding: 0.95rem;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.file-system-delete-dialog-title {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--text-primary);
+}
+
+.file-system-delete-dialog-message {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: calc(0.8rem * var(--control-font-scale));
+}
+
+.file-system-delete-dialog-path {
+  margin: 0;
+  color: var(--text-primary);
+  font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+  font-size: calc(0.76rem * var(--control-font-scale));
+  overflow-wrap: anywhere;
+}
+
+.file-system-delete-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.file-system-delete-dialog-cancel,
+.file-system-delete-dialog-confirm {
+  border: 1px solid var(--border-default);
+  border-radius: var(--control-radius);
+  height: var(--control-height);
+  padding: 0 var(--control-padding-x);
+  font-size: calc(0.78rem * var(--control-font-scale));
+  cursor: pointer;
+}
+
+.file-system-delete-dialog-cancel {
+  background: var(--surface-control);
+  color: var(--text-primary);
+}
+
+.file-system-delete-dialog-cancel:hover {
+  background: var(--surface-control-hover);
+}
+
+.file-system-delete-dialog-confirm {
+  background: var(--error-text);
+  border-color: color-mix(in srgb, var(--error-text) 80%, #000 20%);
+  color: #fff;
+}
+
+.file-system-delete-dialog-confirm:hover {
+  background: color-mix(in srgb, var(--error-text) 88%, #000 12%);
+}
+
+.file-system-delete-dialog-cancel:disabled,
+.file-system-delete-dialog-confirm:disabled {
+  opacity: 0.72;
+  cursor: default;
+}
+
 .file-system-root-error {
   display: flex;
   flex-wrap: wrap;

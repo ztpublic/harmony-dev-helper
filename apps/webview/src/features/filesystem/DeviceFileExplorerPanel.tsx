@@ -53,6 +53,7 @@ export function DeviceFileExplorerPanel({
   const [supportsFsList, setSupportsFsList] = useState(false);
   const [supportsFsUpload, setSupportsFsUpload] = useState(false);
   const [supportsFsDownload, setSupportsFsDownload] = useState(false);
+  const [supportsFsDelete, setSupportsFsDelete] = useState(false);
   const [capabilityError, setCapabilityError] = useState<string>();
   const [recentExpandedPathsByDevice, setRecentExpandedPathsByDevice] = useState<
     Record<string, readonly string[]>
@@ -66,6 +67,7 @@ export function DeviceFileExplorerPanel({
       setSupportsFsList(false);
       setSupportsFsUpload(false);
       setSupportsFsDownload(false);
+      setSupportsFsDelete(false);
       setCapabilityError(undefined);
       return;
     }
@@ -83,6 +85,7 @@ export function DeviceFileExplorerPanel({
         setSupportsFsList(Boolean(result.capabilities["hdc.fs.list"]));
         setSupportsFsUpload(Boolean(result.capabilities["hdc.fs.upload"]));
         setSupportsFsDownload(Boolean(result.capabilities["hdc.fs.download"]));
+        setSupportsFsDelete(Boolean(result.capabilities["hdc.fs.delete"]));
         setCapabilitiesStatus("ready");
       } catch (error) {
         if (cancelled) {
@@ -92,6 +95,7 @@ export function DeviceFileExplorerPanel({
         setSupportsFsList(false);
         setSupportsFsUpload(false);
         setSupportsFsDownload(false);
+        setSupportsFsDelete(false);
         setCapabilitiesStatus("error");
         setCapabilityError(toErrorMessage(error));
       }
@@ -189,6 +193,7 @@ export function DeviceFileExplorerPanel({
       rootPath="/"
       uploadEnabled={supportsFsUpload && hostFilePickerAvailable}
       downloadEnabled={supportsFsDownload && hostFilePickerAvailable}
+      deleteEnabled={supportsFsDelete}
       pickUploadFiles={pickUploadFiles}
       pickDownloadDirectory={pickDownloadDirectory}
       recentExpandedDirectoryPaths={recentExpandedDirectoryPaths}

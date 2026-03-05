@@ -79,6 +79,23 @@ export function createHdcVirtualFileSystem({
       return {
         localPath: result.localPath
       };
+    },
+    async deletePath(path: string): Promise<{ deletedPath: string }> {
+      const normalizedPath = normalizeDevicePath(path);
+      const result = await client.invoke(
+        "hdc.fs.delete",
+        {
+          connectKey,
+          path: normalizedPath
+        },
+        {
+          timeoutMs: FILE_TRANSFER_TIMEOUT_MS
+        }
+      );
+
+      return {
+        deletedPath: result.deletedPath
+      };
     }
   };
 }

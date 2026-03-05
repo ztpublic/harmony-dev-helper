@@ -12,6 +12,7 @@ export interface VirtualFileSystem {
   listDirectory(path: string): Promise<readonly VfsEntry[]>;
   uploadFile(localPath: string, remoteDirectory: string): Promise<{ remotePath: string }>;
   downloadFile(remotePath: string, localDirectory: string): Promise<{ localPath: string }>;
+  deletePath(path: string): Promise<{ deletedPath: string }>;
 }
 
 export interface FileSystemProps {
@@ -20,6 +21,7 @@ export interface FileSystemProps {
   height?: number;
   uploadEnabled?: boolean;
   downloadEnabled?: boolean;
+  deleteEnabled?: boolean;
   pickUploadFiles?: (targetDirectoryPath: string) => Promise<readonly string[] | null>;
   pickDownloadDirectory?: (sourceFilePath: string) => Promise<string | null>;
   recentExpandedDirectoryPaths?: readonly string[];
