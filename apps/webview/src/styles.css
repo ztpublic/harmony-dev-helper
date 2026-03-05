@@ -961,6 +961,205 @@ header,
   color: var(--error-text);
 }
 
+.file-system-panel {
+  gap: 0.65rem;
+}
+
+.file-system-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+
+.file-system-refresh-button,
+.file-system-root-retry,
+.file-system-retry-button {
+  border: 1px solid var(--border-default);
+  border-radius: var(--control-radius);
+  background: var(--surface-control);
+  color: var(--text-primary);
+  font-size: calc(0.78rem * var(--control-font-scale));
+  cursor: pointer;
+}
+
+.file-system-refresh-button,
+.file-system-root-retry {
+  height: var(--control-height);
+  padding: 0 var(--control-padding-x);
+}
+
+.file-system-refresh-button:hover,
+.file-system-root-retry:hover,
+.file-system-retry-button:hover {
+  background: var(--surface-control-hover);
+}
+
+.file-system-refresh-button:disabled {
+  opacity: 0.65;
+  cursor: default;
+}
+
+.file-system-root-path {
+  margin-top: -0.2rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+}
+
+.file-system-tree-shell {
+  border: 1px solid var(--border-default);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--surface-control);
+}
+
+.file-system-tree {
+  color: var(--text-primary);
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.file-system-tree * {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.file-system-tree img {
+  -webkit-user-drag: none;
+}
+
+.file-system-tree-row {
+  outline: none;
+}
+
+.file-system-row {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  width: 100%;
+  padding-right: calc(0.45rem * var(--control-scale));
+  font-size: calc(0.82rem * var(--control-font-scale));
+}
+
+.file-system-row-selected {
+  background: color-mix(in srgb, var(--accent-primary) 15%, transparent);
+}
+
+.file-system-row-focused {
+  box-shadow: inset 0 0 0 1px var(--focus-ring);
+}
+
+.file-system-node {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(0.34rem * var(--control-scale));
+  width: 100%;
+  min-width: 0;
+}
+
+.file-system-expander,
+.file-system-expander-placeholder {
+  width: calc(14px * var(--control-scale));
+  height: calc(14px * var(--control-scale));
+  flex: 0 0 calc(14px * var(--control-scale));
+}
+
+.file-system-expander {
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: calc(0.72rem * var(--control-font-scale));
+  line-height: 1;
+}
+
+.file-system-expander:hover {
+  background: var(--surface-control-hover);
+}
+
+.file-system-kind-dot {
+  width: calc(8px * var(--control-scale));
+  height: calc(8px * var(--control-scale));
+  border-radius: 2px;
+  flex: 0 0 calc(8px * var(--control-scale));
+}
+
+.file-system-kind-dot-directory {
+  background: color-mix(in srgb, var(--accent-primary) 68%, var(--surface-control));
+}
+
+.file-system-kind-dot-file {
+  background: var(--border-strong);
+}
+
+.file-system-node-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-system-node-meta,
+.file-system-node-error {
+  margin-left: auto;
+  font-size: calc(0.74rem * var(--control-font-scale));
+  white-space: nowrap;
+}
+
+.file-system-node-meta {
+  color: var(--text-secondary);
+}
+
+.file-system-node-error {
+  color: var(--error-text);
+}
+
+.file-system-retry-button {
+  margin-left: calc(0.25rem * var(--control-scale));
+  height: calc(var(--control-height) * 0.76);
+  padding: 0 calc(0.45rem * var(--control-scale));
+}
+
+.file-system-root-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.55rem;
+}
+
+.file-system-story {
+  width: min(920px, 100%);
+  display: grid;
+  gap: 0.8rem;
+}
+
+.file-system-story-events {
+  padding: 0.8rem;
+  gap: 0.5rem;
+}
+
+.file-system-story-event-row {
+  display: grid;
+  grid-template-columns: calc(64px * var(--control-scale)) 1fr;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+.file-system-story-event-label {
+  color: var(--text-secondary);
+  font-size: calc(0.78rem * var(--control-font-scale));
+}
+
+.file-system-story-event-value {
+  margin: 0;
+  font-size: calc(0.76rem * var(--control-font-scale));
+  color: var(--text-primary);
+  font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+  overflow-wrap: anywhere;
+}
+
 @media (max-width: 640px) {
   .main-tabbed-header {
     flex-wrap: wrap;
@@ -974,5 +1173,10 @@ header,
   .main-tabbed-header-right {
     width: 100%;
     justify-content: flex-end;
+  }
+
+  .file-system-story-event-row {
+    grid-template-columns: 1fr;
+    gap: 0.2rem;
   }
 }
