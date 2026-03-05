@@ -6,6 +6,9 @@ import {
   type RowRendererProps,
   type TreeApi
 } from "react-arborist";
+import defaultFileIcon from "./icons/default-file.svg";
+import defaultFolderIcon from "./icons/default-folder.svg";
+import defaultFolderOpenedIcon from "./icons/default-folder-opened.svg";
 import type { FileSystemProps, VfsEntry } from "./types";
 
 type DirectoryLoadState = "unloaded" | "loading" | "loaded" | "error";
@@ -396,15 +399,7 @@ export function FileSystem({
       return (
         <div style={style} className="file-system-node" title={entry.path}>
           {isDirectory ? (
-            <button
-              type="button"
-              className="file-system-expander"
-              aria-label={node.isOpen ? `Collapse ${entry.name}` : `Expand ${entry.name}`}
-              onClick={(event) => {
-                event.stopPropagation();
-                node.toggle();
-              }}
-            >
+            <span className="file-system-expander" aria-hidden="true">
               <svg
                 className={`file-system-expander-icon ${node.isOpen ? "file-system-expander-icon-open" : ""}`}
                 viewBox="0 0 16 16"
@@ -413,17 +408,21 @@ export function FileSystem({
               >
                 <path d="M6 4.5L10 8L6 11.5" />
               </svg>
-            </button>
+            </span>
           ) : (
             <span className="file-system-expander-placeholder" aria-hidden="true" />
           )}
 
-          <span
-            className={`file-system-kind-dot ${
-              isDirectory ? "file-system-kind-dot-directory" : "file-system-kind-dot-file"
-            }`}
-            aria-hidden="true"
-          />
+          <span className="file-system-entry-icon" aria-hidden="true">
+            <img
+              className="file-system-entry-icon-image"
+              src={
+                isDirectory ? (node.isOpen ? defaultFolderOpenedIcon : defaultFolderIcon) : defaultFileIcon
+              }
+              alt=""
+              draggable={false}
+            />
+          </span>
 
           <span className="file-system-node-label">{entry.name}</span>
 

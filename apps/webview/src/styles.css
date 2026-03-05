@@ -1066,19 +1066,12 @@ header,
 }
 
 .file-system-expander {
-  border: 0;
-  border-radius: 4px;
-  padding: 0;
-  background: transparent;
   color: var(--text-secondary);
   line-height: 1;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-}
-
-.file-system-expander:hover {
-  background: var(--surface-control-hover);
+  pointer-events: none;
 }
 
 .file-system-expander-icon {
@@ -1100,19 +1093,19 @@ header,
   stroke-linejoin: round;
 }
 
-.file-system-kind-dot {
-  width: calc(8px * var(--control-scale));
-  height: calc(8px * var(--control-scale));
-  border-radius: 2px;
-  flex: 0 0 calc(8px * var(--control-scale));
+.file-system-entry-icon {
+  width: calc(16px * var(--control-scale));
+  height: calc(16px * var(--control-scale));
+  flex: 0 0 calc(16px * var(--control-scale));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
 
-.file-system-kind-dot-directory {
-  background: color-mix(in srgb, var(--accent-primary) 68%, var(--surface-control));
-}
-
-.file-system-kind-dot-file {
-  background: var(--border-strong);
+.file-system-entry-icon-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
 }
 
 .file-system-node-label {
