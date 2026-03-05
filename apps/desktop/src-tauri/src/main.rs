@@ -2,6 +2,7 @@ use hdc_bridge_rs::{run_bridge, DEFAULT_WS_ADDR};
 
 fn main() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_log::Builder::default().build())
         .setup(|_app| {
             tauri::async_runtime::spawn(async {

@@ -205,9 +205,10 @@ Supported invoke actions:
 - `ide.openPath`
 - `ide.openExternal`
 - `ide.openChat`
+- `ide.openFilePicker`
 
 `ide.getCapabilities` result:
-- `{ capabilities: { "ide.openFile": boolean, "ide.openPath": boolean, "ide.openExternal": boolean, "ide.openChat": boolean } }`
+- `{ capabilities: { "ide.openFile": boolean, "ide.openPath": boolean, "ide.openExternal": boolean, "ide.openChat": boolean, "ide.openFilePicker": boolean } }`
 
 `ide.getHostInfo` result:
 - `{ host: { host: "vscode" | "cursor" | "trae" | "unknown", uriScheme: string, appName: string, isOfficialVsCode: boolean } }`
@@ -249,9 +250,22 @@ Supported invoke actions:
 - `{ opened: boolean }`
 - Unsupported hosts or open failures return `{ opened: false }`.
 
+`ide.openFilePicker` args:
+- `canSelectFiles?: boolean` (optional, default `true`)
+- `canSelectFolders?: boolean` (optional, default `false`)
+- `canSelectMany?: boolean` (optional, default `false`)
+- `title?: string` (optional, host best effort)
+- `defaultPath?: string` (optional absolute filesystem path)
+- `filters?: Record<string, string[]>` (optional extension filters)
+
+`ide.openFilePicker` result:
+- `{ canceled: boolean, paths: string[] }`
+- Cancel returns `{ canceled: true, paths: [] }`.
+
 Host support (current):
-- VSCode extension: `ide.getHostInfo`, `ide.openFile`, `ide.openPath`, `ide.openExternal`, `ide.openChat` all supported.
-- IntelliJ plugin: `ide.getHostInfo` supported (returns `unknown` host); `ide.openFile` supported; `ide.openPath`, `ide.openExternal`, and `ide.openChat` are advertised as unsupported (`false`) and return no-op `{ opened: false }` if invoked.
+- Tauri desktop: `ide.openFilePicker` supported; `ide.openFile`, `ide.openPath`, `ide.openExternal`, and `ide.openChat` are currently unsupported.
+- VSCode extension: `ide.getHostInfo`, `ide.openFile`, `ide.openPath`, `ide.openExternal`, `ide.openChat`, and `ide.openFilePicker` all supported.
+- IntelliJ plugin: `ide.getHostInfo` supported (returns `unknown` host); `ide.openFile` supported; `ide.openPath`, `ide.openExternal`, `ide.openChat`, and `ide.openFilePicker` are advertised as unsupported (`false`) and return no-op results if invoked.
 
 Host bridge error codes:
 - `UNSUPPORTED_HOST`

@@ -49,6 +49,10 @@ interface LocationLike {
   search: string;
 }
 
+interface NavigatorLike {
+  userAgent?: string;
+}
+
 interface VsCodeWebviewApi {
   postMessage: (message: unknown) => unknown;
 }
@@ -56,6 +60,9 @@ interface VsCodeWebviewApi {
 interface WindowLike {
   __HARMONY_BRIDGE__?: BridgeBootstrap;
   __TAURI__?: unknown;
+  __TAURI_INTERNALS__?: unknown;
+  __TAURI_METADATA__?: unknown;
+  navigator?: NavigatorLike;
   acquireVsCodeApi?: () => VsCodeWebviewApi;
   __HARMONY_INTELLIJ_HOST_INVOKE__?: (
     request: HostBridgeInvokeMessage
@@ -70,6 +77,81 @@ export interface InvokeOptions {
 }
 
 const DEFAULT_INVOKE_TIMEOUT_MS = 8_000;
+let sharedVsCodeApi: VsCodeWebviewApi | null | undefined;
+let tauriDialogOpenPromise: Promise<
+  ((options?: TauriDialogOpenOptions) => Promise<TauriDialogResult>) | null
+> | null = null;
+
+interface TauriDialogFilter {
+  name: string;
+  extensions: string[];
+}
+
+interface TauriDialogOpenOptions {
+  title?: string;
+  defaultPath?: string;
+  directory?: boolean;
+  multiple?: boolean;
+  filters?: TauriDialogFilter[];
+}
+
+type TauriDialogResult = string | string[] | null;
+
+const TAURI_IDE_CAPABILITIES: IdeCapabilities = {
+  "ide.openFile": false,
+  "ide.openPath": false,
+  "ide.openExternal": false,
+  "ide.openChat": false,
+  "ide.openFilePicker": true
+};
+
+function normalizeTauriDialogFilters(value?: Record<string, string[]>): TauriDialogFilter[] | undefined {
+  if (!value) {
+    return undefined;
+  }
+
+  const filters: TauriDialogFilter[] = [];
+  for (const [name, extensions] of Object.entries(value)) {
+    if (!Array.isArray(extensions) || extensions.length === 0) {
+      continue;
+    }
+
+    const normalizedName = name.trim();
+    const normalizedExtensions = extensions
+      .map((entry) => entry.trim().replace(/^\.+/, ""))
+      .filter((entry) => entry.length > 0);
+
+    if (!normalizedName || normalizedExtensions.length === 0) {
+      continue;
+    }
+
+    filters.push({
+      name: normalizedName,
+      extensions: normalizedExtensions
+    });
+  }
+
+  return filters.length > 0 ? filters : undefined;
+}
+
+async function loadTauriDialogOpen(): Promise<
+  ((options?: TauriDialogOpenOptions) => Promise<TauriDialogResult>) | null
+> {
+  if (tauriDialogOpenPromise) {
+    return tauriDialogOpenPromise;
+  }
+
+  tauriDialogOpenPromise = import("@tauri-apps/plugin-dialog")
+    .then((module) => {
+      const maybeOpen = (module as { open?: unknown }).open;
+      return typeof maybeOpen === "function"
+        ? (maybeOpen as (options?: TauriDialogOpenOptions) => Promise<TauriDialogResult>)
+        : null;
+    })
+    .catch(() => null);
+
+  return tauriDialogOpenPromise;
+}
 
 function normalizeHostBridgeErrorCode(code: unknown): HostBridgeErrorCode {
   switch (code) {
@@ -120,7 +202,8 @@ function isIdeInvokeAction(value: unknown): value is IdeInvokeAction {
     value === "ide.openFile" ||
     value === "ide.openPath" ||
     value === "ide.openExternal" ||
-    value === "ide.openChat"
+    value === "ide.openChat" ||
+    value === "ide.openFilePicker"
   );
 }
 
@@ -184,7 +267,9 @@ export function resolveBootstrap(windowLike: WindowLike = globalThis as unknown 
     return queryBridge;
   }
 
-  if (windowLike.__TAURI__) {
+  const userAgent = windowLike.navigator?.userAgent?.toLowerCase();
+  const isTauriUserAgent = typeof userAgent === "string" && userAgent.includes("tauri");
+  if (windowLike.__TAURI__ || windowLike.__TAURI_INTERNALS__ || windowLike.__TAURI_METADATA__ || isTauriUserAgent) {
     return { host: "tauri", wsUrl: "ws://127.0.0.1:8787" };
   }
 
@@ -256,6 +341,8 @@ export class HarmonyHostBridgeClient {
         return this.invokeViaVsCode(action, args, timeoutMs);
       case "intellij":
         return this.invokeViaIntelliJ(action, args, timeoutMs);
+      case "tauri":
+        return this.invokeViaTauri(action, args);
       default:
         return Promise.reject(
           toHostBridgeError(
@@ -349,11 +436,21 @@ export class HarmonyHostBridgeClient {
       return this.vsCodeApi;
     }
 
+    if (sharedVsCodeApi !== undefined) {
+      this.vsCodeApi = sharedVsCodeApi;
+      return this.vsCodeApi;
+    }
+
     try {
       const api = this.windowLike.acquireVsCodeApi?.();
-      this.vsCodeApi = api && typeof api.postMessage === "function" ? api : null;
+      const resolvedApi = api && typeof api.postMessage === "function" ? api : null;
+      this.vsCodeApi = resolvedApi;
+      sharedVsCodeApi = resolvedApi;
     } catch {
-      this.vsCodeApi = null;
+      this.vsCodeApi = sharedVsCodeApi ?? null;
+      if (sharedVsCodeApi === undefined) {
+        sharedVsCodeApi = this.vsCodeApi;
+      }
     }
 
     return this.vsCodeApi;
@@ -431,6 +528,72 @@ export class HarmonyHostBridgeClient {
           reject(toHostBridgeError("OPEN_FAILED", error instanceof Error ? error.message : String(error)));
         });
     });
+  }
+
+  private async invokeViaTauri<TAction extends IdeInvokeAction>(
+    action: TAction,
+    args: IdeInvokeArgsByAction[TAction]
+  ): Promise<IdeInvokeResultByAction[TAction]> {
+    if (action === "ide.getCapabilities") {
+      return {
+        capabilities: TAURI_IDE_CAPABILITIES
+      } as IdeInvokeResultByAction[TAction];
+    }
+
+    if (action === "ide.getHostInfo") {
+      return {
+        host: {
+          host: "unknown",
+          uriScheme: "",
+          appName: "Tauri",
+          isOfficialVsCode: false
+        }
+      } as IdeInvokeResultByAction[TAction];
+    }
+
+    if (action === "ide.openFilePicker") {
+      const pickerArgs = args as IdeInvokeArgsByAction["ide.openFilePicker"];
+      const canSelectFiles = pickerArgs.canSelectFiles ?? true;
+      const canSelectFolders = pickerArgs.canSelectFolders ?? false;
+      if (!canSelectFiles && !canSelectFolders) {
+        throw toHostBridgeError(
+          "INVALID_ARGS",
+          "At least one of `canSelectFiles` or `canSelectFolders` must be true"
+        );
+      }
+
+      // Tauri dialog supports either file-mode or directory-mode, not both in one picker.
+      if (canSelectFiles && canSelectFolders) {
+        throw toHostBridgeError(
+          "INVALID_ARGS",
+          "Tauri host does not support selecting files and folders simultaneously"
+        );
+      }
+
+      const open = await loadTauriDialogOpen();
+      if (!open) {
+        throw toHostBridgeError("UNSUPPORTED_HOST", "Tauri dialog plugin is unavailable");
+      }
+
+      const result = await open({
+        title: pickerArgs.title,
+        defaultPath: pickerArgs.defaultPath,
+        directory: canSelectFolders,
+        multiple: pickerArgs.canSelectMany ?? false,
+        filters: canSelectFiles ? normalizeTauriDialogFilters(pickerArgs.filters) : undefined
+      });
+
+      const paths = Array.isArray(result) ? result : result ? [result] : [];
+      return {
+        canceled: paths.length === 0,
+        paths
+      } as IdeInvokeResultByAction[TAction];
+    }
+
+    throw toHostBridgeError(
+      "UNSUPPORTED_HOST",
+      `IDE host action ${action} is not supported for host ${this.bootstrap.host}`
+    );
   }
 
   private ensureVsCodeListener(): void {

@@ -46,6 +46,7 @@ object HarmonyHostBridge {
               .put("ide.openPath", false)
               .put("ide.openExternal", false)
               .put("ide.openChat", false)
+              .put("ide.openFilePicker", false)
           )
         )
       }
@@ -67,6 +68,7 @@ object HarmonyHostBridge {
       "ide.openPath" -> buildNoopOpenResult(id, action)
       "ide.openExternal" -> buildNoopOpenResult(id, action)
       "ide.openChat" -> buildNoopOpenResult(id, action)
+      "ide.openFilePicker" -> buildNoopOpenFilePickerResult(id)
       else -> buildErrorResponse(id, "ide.openFile", "INVALID_ARGS", "Unsupported host bridge action: $action")
     }
   }
@@ -133,7 +135,8 @@ object HarmonyHostBridge {
       action == "ide.openFile" ||
       action == "ide.openPath" ||
       action == "ide.openExternal" ||
-      action == "ide.openChat"
+      action == "ide.openChat" ||
+      action == "ide.openFilePicker"
     ) {
       action
     } else {
@@ -146,6 +149,16 @@ object HarmonyHostBridge {
       id = id,
       action = action,
       data = JSONObject().put("opened", false)
+    )
+  }
+
+  private fun buildNoopOpenFilePickerResult(id: String): String {
+    return buildResultResponse(
+      id = id,
+      action = "ide.openFilePicker",
+      data = JSONObject()
+        .put("canceled", true)
+        .put("paths", org.json.JSONArray())
     )
   }
 

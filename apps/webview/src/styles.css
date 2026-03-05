@@ -391,6 +391,16 @@ body {
   background: var(--surface-control-disabled);
 }
 
+.settings-input-row {
+  display: flex;
+  gap: 0.55rem;
+}
+
+.settings-input-row .settings-input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
 .settings-actions {
   display: flex;
   flex-wrap: wrap;

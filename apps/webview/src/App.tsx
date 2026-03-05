@@ -1,5 +1,11 @@
-import { HarmonyWebSocketClient, type ConnectionState, resolveBootstrap } from "@harmony/webview-bridge";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  HarmonyWebSocketClient,
+  createHostBridgeClient,
+  type ConnectionState,
+  type HarmonyHostBridgeClient,
+  resolveBootstrap
+} from "@harmony/webview-bridge";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MainTabbedPanel } from "./components/MainTabbedPanel";
 import { DeviceFileExplorerPanel } from "./features/filesystem/DeviceFileExplorerPanel";
 import { useHdcBinConfig } from "./features/hdc/useHdcBinConfig";
@@ -20,15 +26,56 @@ import {
   type AppTheme
 } from "./features/settings/appSettings";
 
+const WINDOWS_ABSOLUTE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
+const WINDOWS_UNC_PATH_REGEX = /^\\\\/;
+
+function isAbsolutePath(path: string): boolean {
+  return path.startsWith("/") || WINDOWS_ABSOLUTE_PATH_REGEX.test(path) || WINDOWS_UNC_PATH_REGEX.test(path);
+}
+
 export default function App() {
   const bootstrap = useMemo(() => resolveBootstrap(window), []);
   const [state, setState] = useState<ConnectionState>("idle");
   const [client, setClient] = useState<HarmonyWebSocketClient>();
+  const hostBridgeClientRef = useRef<HarmonyHostBridgeClient | null>(null);
+  const [canBrowseHdcPath, setCanBrowseHdcPath] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [activeMainTab, setActiveMainTab] = useState<MainPanelTabId>(() =>
     readPersistedMainTab(bootstrap.host, DEFAULT_MAIN_PANEL_TAB_ID)
   );
   const [appSettings, setAppSettings] = useState<AppSettings>(() => readAppSettings(bootstrap.host));
+
+  useEffect(() => {
+    const hostBridge = createHostBridgeClient(window);
+    hostBridgeClientRef.current = hostBridge;
+    setCanBrowseHdcPath(false);
+
+    let cancelled = false;
+    void hostBridge
+      .getCapabilities()
+      .then((capabilities) => {
+        if (cancelled) {
+          return;
+        }
+
+        setCanBrowseHdcPath(Boolean(capabilities["ide.openFilePicker"]));
+      })
+      .catch(() => {
+        if (cancelled) {
+          return;
+        }
+
+        setCanBrowseHdcPath(false);
+      });
+
+    return () => {
+      cancelled = true;
+      hostBridge.dispose();
+      if (hostBridgeClientRef.current === hostBridge) {
+        hostBridgeClientRef.current = null;
+      }
+    };
+  }, [bootstrap.host]);
 
   useEffect(() => {
     const websocketClient = new HarmonyWebSocketClient(bootstrap);
@@ -138,6 +185,31 @@ export default function App() {
     }));
   }, []);
 
+  const browseHdcPath = useCallback(async (): Promise<string | null> => {
+    const hostBridgeClient = hostBridgeClientRef.current;
+    if (!hostBridgeClient) {
+      return null;
+    }
+
+    const defaultPathCandidate = hdcBinConfig.customBinPath ?? hdcBinConfig.resolvedBinPath ?? undefined;
+    const defaultPath =
+      defaultPathCandidate && isAbsolutePath(defaultPathCandidate) ? defaultPathCandidate : undefined;
+
+    const result = await hostBridgeClient.invoke("ide.openFilePicker", {
+      canSelectFiles: true,
+      canSelectFolders: false,
+      canSelectMany: false,
+      title: "Select HDC binary",
+      defaultPath
+    });
+
+    if (result.canceled || result.paths.length === 0) {
+      return null;
+    }
+
+    return result.paths[0] ?? null;
+  }, [hdcBinConfig.customBinPath, hdcBinConfig.resolvedBinPath]);
+
   const mainTabPanels: Record<MainPanelTabId, ReactNode> = {
     hilog: (
       <HilogConsolePanel
@@ -227,6 +299,8 @@ export default function App() {
         onClose={() => {
           setSettingsOpen(false);
         }}
+        canBrowseHdcPath={canBrowseHdcPath}
+        onBrowseHdcPath={browseHdcPath}
         onSaveHdcPath={async (path) => {
           await hdcBinConfig.saveCustomPath(path);
           await hdcBinConfig.refresh();

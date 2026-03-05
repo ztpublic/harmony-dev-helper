@@ -31,6 +31,7 @@ export interface IdeCapabilities {
   "ide.openPath": boolean;
   "ide.openExternal": boolean;
   "ide.openChat": boolean;
+  "ide.openFilePicker": boolean;
 }
 
 export type IdeHost = "vscode" | "cursor" | "trae" | "unknown";
@@ -67,13 +68,23 @@ export interface IdeOpenChatArgs {
   isPartialQuery?: boolean;
 }
 
+export interface IdeOpenFilePickerArgs {
+  canSelectFiles?: boolean;
+  canSelectFolders?: boolean;
+  canSelectMany?: boolean;
+  title?: string;
+  defaultPath?: string;
+  filters?: Record<string, string[]>;
+}
+
 export type IdeInvokeAction =
   | "ide.getCapabilities"
   | "ide.getHostInfo"
   | "ide.openFile"
   | "ide.openPath"
   | "ide.openExternal"
-  | "ide.openChat";
+  | "ide.openChat"
+  | "ide.openFilePicker";
 
 export interface IdeInvokeArgsByAction {
   "ide.getCapabilities": Record<string, never>;
@@ -82,6 +93,7 @@ export interface IdeInvokeArgsByAction {
   "ide.openPath": IdeOpenPathArgs;
   "ide.openExternal": IdeOpenExternalArgs;
   "ide.openChat": IdeOpenChatArgs;
+  "ide.openFilePicker": IdeOpenFilePickerArgs;
 }
 
 export interface IdeInvokeResultByAction {
@@ -91,6 +103,7 @@ export interface IdeInvokeResultByAction {
   "ide.openPath": { opened: boolean };
   "ide.openExternal": { opened: boolean };
   "ide.openChat": { opened: boolean };
+  "ide.openFilePicker": { canceled: boolean; paths: string[] };
 }
 
 type IdeInvokePayload = {

@@ -27,7 +27,8 @@ type HostBridgeAction =
   | "ide.openFile"
   | "ide.openPath"
   | "ide.openExternal"
-  | "ide.openChat";
+  | "ide.openChat"
+  | "ide.openFilePicker";
 type HostBridgeErrorCode =
   | "UNSUPPORTED_HOST"
   | "INVALID_ARGS"
@@ -58,6 +59,20 @@ interface IdeOpenExternalArgs {
 interface IdeOpenChatArgs {
   query: string;
   isPartialQuery?: boolean;
+}
+
+interface IdeOpenFilePickerArgs {
+  canSelectFiles?: boolean;
+  canSelectFolders?: boolean;
+  canSelectMany?: boolean;
+  title?: string;
+  defaultPath?: string;
+  filters?: Record<string, string[]>;
+}
+
+interface IdeOpenFilePickerResult {
+  canceled: boolean;
+  paths: string[];
 }
 
 function sleep(ms: number): Promise<void> {
@@ -252,7 +267,8 @@ function isHostBridgeAction(value: unknown): value is HostBridgeAction {
     value === "ide.openFile" ||
     value === "ide.openPath" ||
     value === "ide.openExternal" ||
-    value === "ide.openChat"
+    value === "ide.openChat" ||
+    value === "ide.openFilePicker"
   );
 }
 
@@ -356,7 +372,8 @@ function createHostBridgeCapabilitiesResult(id: string): HostBridgeResultMessage
           "ide.openFile": true,
           "ide.openPath": true,
           "ide.openExternal": true,
-          "ide.openChat": true
+          "ide.openChat": true,
+          "ide.openFilePicker": true
         }
       }
     }
@@ -429,6 +446,21 @@ function createHostBridgeOpenChatResult(id: string, opened: boolean): HostBridge
       data: {
         opened
       }
+    }
+  };
+}
+
+function createHostBridgeOpenFilePickerResult(
+  id: string,
+  result: IdeOpenFilePickerResult
+): HostBridgeResultMessage {
+  return {
+    channel: HOST_BRIDGE_CHANNEL,
+    id,
+    type: "result",
+    payload: {
+      action: "ide.openFilePicker",
+      data: result
     }
   };
 }
@@ -593,6 +625,110 @@ function parseOpenChatArgs(args: unknown): IdeOpenChatArgs | string {
   };
 }
 
+function parseOpenDialogFilters(
+  value: unknown
+): Record<string, string[]> | string | undefined {
+  if (value === undefined) {
+    return undefined;
+  }
+
+  if (!isObjectRecord(value)) {
+    return "`filters` must be an object when provided";
+  }
+
+  const normalized: Record<string, string[]> = {};
+  for (const [rawLabel, rawExtensions] of Object.entries(value)) {
+    const label = rawLabel.trim();
+    if (!label) {
+      return "Filter names must be non-empty strings";
+    }
+
+    if (!Array.isArray(rawExtensions)) {
+      return `\`filters.${label}\` must be an array of extensions`;
+    }
+
+    const extensions: string[] = [];
+    for (const rawExtension of rawExtensions) {
+      if (typeof rawExtension !== "string") {
+        return `\`filters.${label}\` entries must be strings`;
+      }
+
+      const trimmed = rawExtension.trim();
+      if (!trimmed) {
+        return `\`filters.${label}\` entries must be non-empty strings`;
+      }
+
+      const normalizedExtension = trimmed.replace(/^\.+/, "");
+      if (!normalizedExtension) {
+        return `\`filters.${label}\` entries must include an extension`;
+      }
+
+      extensions.push(normalizedExtension);
+    }
+
+    normalized[label] = extensions;
+  }
+
+  return normalized;
+}
+
+function parseOpenFilePickerArgs(args: unknown): IdeOpenFilePickerArgs | string {
+  if (!isObjectRecord(args)) {
+    return "`args` must be an object";
+  }
+
+  const canSelectFiles = parseOptionalBoolean(args.canSelectFiles, "canSelectFiles");
+  if (typeof canSelectFiles === "string") {
+    return canSelectFiles;
+  }
+
+  const canSelectFolders = parseOptionalBoolean(args.canSelectFolders, "canSelectFolders");
+  if (typeof canSelectFolders === "string") {
+    return canSelectFolders;
+  }
+
+  const canSelectMany = parseOptionalBoolean(args.canSelectMany, "canSelectMany");
+  if (typeof canSelectMany === "string") {
+    return canSelectMany;
+  }
+
+  const titleRaw = args.title;
+  if (titleRaw !== undefined && typeof titleRaw !== "string") {
+    return "`title` must be a string when provided";
+  }
+
+  const defaultPathRaw = args.defaultPath;
+  if (defaultPathRaw !== undefined && typeof defaultPathRaw !== "string") {
+    return "`defaultPath` must be a string when provided";
+  }
+
+  const filters = parseOpenDialogFilters(args.filters);
+  if (typeof filters === "string") {
+    return filters;
+  }
+
+  const normalizedDefaultPath = defaultPathRaw?.trim();
+  if (normalizedDefaultPath && !path.isAbsolute(normalizedDefaultPath)) {
+    return "`defaultPath` must be an absolute filesystem path";
+  }
+
+  const normalizedCanSelectFiles = canSelectFiles ?? true;
+  const normalizedCanSelectFolders = canSelectFolders ?? false;
+  if (!normalizedCanSelectFiles && !normalizedCanSelectFolders) {
+    return "At least one of `canSelectFiles` or `canSelectFolders` must be true";
+  }
+
+  const normalizedTitle = titleRaw?.trim();
+  return {
+    canSelectFiles: normalizedCanSelectFiles,
+    canSelectFolders: normalizedCanSelectFolders,
+    canSelectMany: canSelectMany ?? false,
+    title: normalizedTitle && normalizedTitle.length > 0 ? normalizedTitle : undefined,
+    defaultPath: normalizedDefaultPath && normalizedDefaultPath.length > 0 ? normalizedDefaultPath : undefined,
+    filters
+  };
+}
+
 async function openFileInEditor(args: IdeOpenFileArgs): Promise<void> {
   if (!fs.existsSync(args.path)) {
     throw new Error("FILE_NOT_FOUND");
@@ -710,6 +846,39 @@ async function openChatInIde(args: IdeOpenChatArgs): Promise<boolean> {
   }
 }
 
+async function openFilePickerInIde(args: IdeOpenFilePickerArgs): Promise<IdeOpenFilePickerResult> {
+  const options: vscode.OpenDialogOptions = {
+    canSelectFiles: args.canSelectFiles ?? true,
+    canSelectFolders: args.canSelectFolders ?? false,
+    canSelectMany: args.canSelectMany ?? false
+  };
+
+  if (args.title) {
+    options.title = args.title;
+  }
+
+  if (args.defaultPath) {
+    options.defaultUri = vscode.Uri.file(args.defaultPath);
+  }
+
+  if (args.filters && Object.keys(args.filters).length > 0) {
+    options.filters = args.filters;
+  }
+
+  const selection = await vscode.window.showOpenDialog(options);
+  if (!selection || selection.length === 0) {
+    return {
+      canceled: true,
+      paths: []
+    };
+  }
+
+  return {
+    canceled: false,
+    paths: selection.map((uri) => uri.fsPath)
+  };
+}
+
 async function handleHostBridgeInvoke(
   raw: unknown,
   webview: vscode.Webview,
@@ -780,6 +949,29 @@ async function handleHostBridgeInvoke(
     const opened = await openChatInIde(parsedArgs);
     output.appendLine(`[host-bridge] ide.openChat opened=${opened}`);
     await webview.postMessage(createHostBridgeOpenChatResult(id, opened));
+    return;
+  }
+
+  if (action === "ide.openFilePicker") {
+    const parsedArgs = parseOpenFilePickerArgs(payload.args);
+    if (typeof parsedArgs === "string") {
+      await webview.postMessage(createHostBridgeError(id, action, "INVALID_ARGS", parsedArgs));
+      return;
+    }
+
+    output.appendLine("[host-bridge] ide.openFilePicker");
+    try {
+      const result = await openFilePickerInIde(parsedArgs);
+      output.appendLine(
+        `[host-bridge] ide.openFilePicker canceled=${result.canceled} paths=${result.paths.length}`
+      );
+      await webview.postMessage(createHostBridgeOpenFilePickerResult(id, result));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      output.appendLine(`[host-bridge:OPEN_FAILED] ${message}`);
+      await webview.postMessage(createHostBridgeError(id, action, "OPEN_FAILED", message));
+    }
+
     return;
   }
 

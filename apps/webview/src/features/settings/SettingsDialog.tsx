@@ -11,6 +11,7 @@ interface SettingsDialogProps {
   open: boolean;
   loading: boolean;
   saving: boolean;
+  canBrowseHdcPath: boolean;
   customBinPath: string | null;
   resolvedBinPath: string | null;
   source: BinConfigSource;
@@ -18,6 +19,7 @@ interface SettingsDialogProps {
   hilogHistoryLimit: number;
   theme: AppTheme;
   onClose: () => void;
+  onBrowseHdcPath: () => Promise<string | null>;
   onSaveHdcPath: (path: string) => Promise<void>;
   onClearHdcPath: () => Promise<void>;
   onSaveHilogHistoryLimit: (limit: number) => void;
@@ -49,6 +51,7 @@ export function SettingsDialog({
   open,
   loading,
   saving,
+  canBrowseHdcPath,
   customBinPath,
   resolvedBinPath,
   source,
@@ -56,12 +59,14 @@ export function SettingsDialog({
   hilogHistoryLimit,
   theme,
   onClose,
+  onBrowseHdcPath,
   onSaveHdcPath,
   onClearHdcPath,
   onSaveHilogHistoryLimit,
   onSaveTheme
 }: SettingsDialogProps) {
   const [inputPath, setInputPath] = useState("");
+  const [browsingPath, setBrowsingPath] = useState(false);
   const [localError, setLocalError] = useState<string>();
   const [historyInput, setHistoryInput] = useState(String(hilogHistoryLimit));
   const [historyError, setHistoryError] = useState<string>();
@@ -70,6 +75,7 @@ export function SettingsDialog({
   useEffect(() => {
     if (open) {
       setInputPath(customBinPath ?? "");
+      setBrowsingPath(false);
       setLocalError(undefined);
       setHistoryInput(String(hilogHistoryLimit));
       setHistoryError(undefined);
@@ -141,17 +147,43 @@ export function SettingsDialog({
           <label htmlFor="hdc-bin-path" className="settings-label">
             Custom HDC binary path
           </label>
-          <input
-            id="hdc-bin-path"
-            className="settings-input"
-            type="text"
-            value={inputPath}
-            placeholder="/path/to/hdc"
-            onChange={(event) => {
-              setInputPath(event.target.value);
-              setLocalError(undefined);
-            }}
-          />
+          <div className="settings-input-row">
+            <input
+              id="hdc-bin-path"
+              className="settings-input"
+              type="text"
+              value={inputPath}
+              placeholder="/path/to/hdc"
+              onChange={(event) => {
+                setInputPath(event.target.value);
+                setLocalError(undefined);
+              }}
+            />
+            {canBrowseHdcPath ? (
+              <button
+                type="button"
+                className="settings-secondary"
+                disabled={saving || loading || browsingPath}
+                onClick={async () => {
+                  setBrowsingPath(true);
+                  setLocalError(undefined);
+
+                  try {
+                    const selectedPath = await onBrowseHdcPath();
+                    if (selectedPath) {
+                      setInputPath(selectedPath);
+                    }
+                  } catch (error) {
+                    setLocalError(error instanceof Error ? error.message : String(error));
+                  } finally {
+                    setBrowsingPath(false);
+                  }
+                }}
+              >
+                {browsingPath ? "Browsing..." : "Browse"}
+              </button>
+            ) : null}
+          </div>
 
           <div className="settings-actions">
             <button
