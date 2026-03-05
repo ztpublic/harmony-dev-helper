@@ -5,56 +5,87 @@ Shared Harmony webview architecture for:
 - VSCode extension
 - IntelliJ plugin
 
-All hosts use the same frontend and communicate with the backend over WebSocket (no Tauri `invoke` API path). The same Rust backend process also exposes an MCP Streamable HTTP endpoint.
+All hosts use the same frontend and communicate with `hdc-bridge-rs` over WebSocket. The same bridge process also serves an MCP Streamable HTTP endpoint.
 
-## Current state
+## Current status (March 2026)
 
-The shared webview currently includes:
-- HDC target discovery/selection
-- Hilog live console (streaming, pause/resume, clear, auto-scroll, dropped-line counter)
+Implemented today:
+- Shared React webview with two main tabs:
+  - `Hilog`
+  - `File Explorer`
+- HDC target discovery + device selection (with friendly labels from device parameters when available).
+- Hilog live console with:
+  - start/stop via subscribe/unsubscribe
+  - pause/resume
+  - level filter (`D/I/W/E/F`)
+  - PID filter (from `hdc.hilog.listPids`)
+  - search with ANSI-safe highlighting
+  - "Stick to end" toggle
+  - terminal context menu (copy/select all/clear)
+  - Ctrl/Cmd+click link handling for `http(s)` URLs and path-like tokens
+  - optional "Add to Chat" action when host supports `ide.openChat`
+- Device File Explorer with:
+  - lazy tree loading over `hdc.fs.list`
+  - absolute-path navigation
+  - refresh/retry flows
+  - recent expanded folders
+  - copy-path context menu
 - Settings dialog for:
-  - HDC binary path (custom override + validation)
+  - custom HDC binary path (manual input + host picker when supported)
   - Hilog history limit
-  - App theme (dark/light)
+  - app theme (dark/light)
+- HDC binary config persistence at:
+  - `~/.harmony-dev-helper/hdc-bridge.json`
 
-HDC binary config is persisted to:
-- `~/.harmony-dev-helper/hdc-bridge.json`
+Current limitation:
+- MCP endpoint is infrastructure-only right now. Transport works, but HDC tool surface is not exposed yet.
 
 ## Stack
 
 - `pnpm` workspaces + `turbo`
 - React + TypeScript + Vite (`apps/webview`)
-- Rust WebSocket + MCP Streamable HTTP bridge (`apps/hdc-bridge-rs`)
-- Shared `hdckit-rs` crate (`apps/hdckit-rs`)
-- Tauri v2 desktop shell
-- Storybook for webview component work
+- Rust WebSocket + MCP HTTP bridge (`apps/hdc-bridge-rs`)
+- Shared Rust HDC client crate (`apps/hdckit-rs`)
+- Tauri v2 desktop host (`apps/desktop`)
+- VSCode extension host (`apps/vscode-extension`)
+- IntelliJ plugin host (`apps/intellij-plugin`)
+- Storybook for webview components
 
 ## Repository layout
 
 - `apps/webview`: shared React UI used by all hosts
 - `apps/hdc-bridge-rs`: shared Rust backend bridge (library + binary)
-- `apps/hdckit-rs`: shared Rust HDC client crate used by bridge/desktop flows
-- `apps/desktop`: Tauri shell; embeds bridge in-process
+- `apps/hdckit-rs`: shared Rust HDC client crate
+- `apps/desktop`: Tauri shell; runs bridge in-process
 - `apps/vscode-extension`: VSCode host; starts bridge sidecar
 - `apps/intellij-plugin`: IntelliJ host; starts bridge sidecar
-- `packages/protocol`: shared protocol types/envelopes
-- `packages/webview-bridge`: shared browser WebSocket client + typed invoke helper
+- `packages/protocol`: shared protocol types
+- `packages/webview-bridge`: shared frontend WebSocket + host-bridge client
+- `scripts/sync-webview-assets.mjs`: sync built webview into VSCode/IntelliJ host assets
+- `scripts/sync-vscode-bridge-bin.mjs`: copy built bridge binary into VSCode extension
 
 ## Requirements
 
-- Node.js + `pnpm` (workspace uses `pnpm@10`)
-- Rust toolchain (`cargo`) for desktop and sidecar fallback flows
+- Node.js + `pnpm` (workspace uses `pnpm@10.6.2`)
+- Rust toolchain (`cargo`)
 - IntelliJ plugin development: JDK 17
 
 ## Common commands
 
 ```bash
 pnpm install
+
+# Core development
 pnpm dev:webview
 pnpm dev:desktop
 pnpm dev:vscode
-pnpm storybook
+
+# Host asset prep
 pnpm prepare:hosts
+pnpm prepare:vscode-host
+
+# Quality/build
+pnpm storybook
 pnpm build
 pnpm typecheck
 pnpm lint
@@ -68,48 +99,58 @@ pnpm lint
 pnpm dev:desktop
 ```
 
-Starts the bridge in-process on:
-- `ws://127.0.0.1:8787` (web frontend protocol)
-- `http://127.0.0.1:8887/mcp` (MCP Streamable HTTP)
-- `http://127.0.0.1:8887/health` (liveness)
+This runs Tauri with the shared webview dev server and starts bridge runtime in-process.
 
 ### VSCode extension
 
-Build/watch extension TypeScript:
+Compile extension in watch mode:
 
 ```bash
-pnpm --filter ./apps/vscode-extension watch
+pnpm dev:vscode
 ```
 
-Prepare VSCode host assets (frontend + backend sidecar):
+Prepare host assets and bundled bridge binary:
 
 ```bash
 pnpm prepare:vscode-host
 ```
 
-Notes:
-- The shared UI is hosted in the bottom Panel area as the `Harmony` view container (`harmony-main-view`).
-- The VSCode sidecar bridge starts lazily when the Harmony view is first opened.
+Bridge sidecar startup order in VSCode:
+1. `HARMONY_HDC_BRIDGE_BIN` (absolute path)
+2. Bundled binary at `apps/vscode-extension/bin/hdc-bridge-rs` (or `.exe`)
+3. Fallback `cargo run --manifest-path apps/hdc-bridge-rs/Cargo.toml -- --ws-addr 127.0.0.1:8788`
+
+Optional manifest override:
+- `HARMONY_HDC_BRIDGE_MANIFEST_PATH`
 
 ### IntelliJ plugin
 
-1. Build and sync webview assets:
+1. Build webview and sync host assets:
+
 ```bash
 pnpm prepare:hosts
 ```
-2. Open `apps/intellij-plugin` in IntelliJ and run the `runIde` Gradle task.
 
-Notes:
-- The shared UI is hosted in the bottom `Harmony` tool window.
-- The IntelliJ sidecar bridge starts when the tool window content is created.
-- By default IntelliJ serves `src/main/resources/webview` via an embedded server (`http://127.0.0.1:8790`).
-- You can override the URL with:
-  `-Dharmony.webview.url=http://127.0.0.1:1420`
+2. Open `apps/intellij-plugin` in IntelliJ and run Gradle `runIde`.
+
+Bridge sidecar startup order in IntelliJ:
+1. `HARMONY_HDC_BRIDGE_BIN` (absolute path)
+2. Fallback `cargo run --manifest-path <resolved>/apps/hdc-bridge-rs/Cargo.toml -- --ws-addr 127.0.0.1:8789`
+
+Optional manifest override:
+- `HARMONY_HDC_BRIDGE_MANIFEST_PATH`
+
+By default IntelliJ serves `src/main/resources/webview` via:
+- `http://127.0.0.1:8790/index.html`
+
+You can override webview URL:
+- `-Dharmony.webview.url=http://127.0.0.1:1420`
 
 ## Bridge runtime model
 
-`apps/hdc-bridge-rs` is the single HDC backend implementation.
+`apps/hdc-bridge-rs` is the single backend implementation for all hosts.
 
+Default host addresses:
 - Desktop:
   - WebSocket: `ws://127.0.0.1:8787`
   - MCP HTTP: `http://127.0.0.1:8887/mcp`
@@ -120,55 +161,29 @@ Notes:
   - WebSocket: `ws://127.0.0.1:8789`
   - MCP HTTP: `http://127.0.0.1:8889/mcp`
 
-### MCP address derivation and override
+`hdc-bridge-rs` CLI:
 
-By default, MCP HTTP bind address is derived from WebSocket bind address:
-- host is preserved
+```bash
+hdc-bridge-rs [--ws-addr <host:port>] [--mcp-http-addr <host:port>]
+```
+
+When `--mcp-http-addr` is omitted, it is derived from WebSocket address:
+- same host
 - port = `ws_port + 100`
-
-CLI options:
-- `--ws-addr <host:port>`
-- `--mcp-http-addr <host:port>` (optional override; when omitted, derived from `--ws-addr`)
 
 MCP endpoints:
 - `POST|GET|DELETE /mcp` (Streamable HTTP transport)
 - `GET /health` (returns `ok`)
 
-### Sidecar startup order
+## Runtime channel model
 
-VSCode:
-1. `HARMONY_HDC_BRIDGE_BIN` (absolute path to prebuilt `hdc-bridge-rs`)
-2. Bundled binary (`apps/vscode-extension/bin/hdc-bridge-rs`) when present
-3. Fallback: `cargo run --manifest-path apps/hdc-bridge-rs/Cargo.toml -- --ws-addr <host:port> [--mcp-http-addr <host:port>]`
+The webview uses two channels:
+- Data plane (`hdc.*`): webview -> Rust bridge over WebSocket
+- Control plane (`ide.*`): webview -> IDE/Tauri host bridge
 
-IntelliJ:
-1. `HARMONY_HDC_BRIDGE_BIN` (absolute path to prebuilt `hdc-bridge-rs`)
-2. Fallback: `cargo run --manifest-path apps/hdc-bridge-rs/Cargo.toml -- --ws-addr <host:port> [--mcp-http-addr <host:port>]`
+Rust bridge owns HDC features. IDE-specific actions are handled by the host runtime.
 
-Optional manifest override:
-- `HARMONY_HDC_BRIDGE_MANIFEST_PATH`
-
-## Dual-channel runtime model
-
-The shared webview now uses two channels:
-
-- Data plane (`hdc.*`): webview -> Rust bridge over WebSocket (existing behavior)
-- Control plane (`ide.*`): webview -> host IDE bridge (VSCode extension / IntelliJ plugin)
-
-Rust remains responsible for HDC features only; IDE-specific actions are handled by the host runtime.
-
-## Frontend bootstrap contract
-
-Hosts provide one of:
-- `window.__HARMONY_BRIDGE__ = { host, wsUrl }`
-- query params: `?host=<host>&wsUrl=<ws-url>`
-
-Resolution order in `@harmony/webview-bridge`:
-1. `window.__HARMONY_BRIDGE__`
-2. `location.search` (`host`, `wsUrl`)
-3. environment fallback (`tauri`/`vscode`/`browser`)
-
-## Protocol contract (current)
+## WebSocket protocol contract (current)
 
 Envelope shape:
 - `{ id, type, payload, ts }`
@@ -178,27 +193,31 @@ Supported invoke actions:
 - `hdc.listTargets`
 - `hdc.getParameters`
 - `hdc.shell`
+- `hdc.fs.list`
 - `hdc.getBinConfig`
 - `hdc.setBinPath`
+- `hdc.hilog.listPids`
 - `hdc.hilog.subscribe`
 - `hdc.hilog.unsubscribe`
 
-`hdc.hilog.subscribe` args:
-- `connectKey: string` (required)
-- `level?: string` (optional, forwarded to `hilog -L`, e.g. `I,W,E` or `^D,I`)
+Selected action args:
+- `hdc.fs.list`: `{ connectKey, path, includeHidden? }` (`path` must be absolute device path)
+- `hdc.hilog.subscribe`: `{ connectKey, level?, pid? }`
+- `hdc.hilog.unsubscribe`: `{ subscriptionId? }`
 
-Additional async host events:
+Async bridge events:
+- `${action}.result` for invoke responses
 - `hdc.hilog.batch`
 - `hdc.hilog.state`
 
-## IDE host bridge contract (new)
+## IDE host bridge contract (current)
 
-Host bridge envelope shape:
+Envelope shape:
 - `{ channel, id, type, payload }`
-- `channel`: always `harmony-host`
-- `type`: `invoke` | `result` | `error`
+- `channel` is always `harmony-host`
+- `type` is `invoke | result | error`
 
-Supported invoke actions:
+Supported host actions:
 - `ide.getCapabilities`
 - `ide.getHostInfo`
 - `ide.openFile`
@@ -207,65 +226,17 @@ Supported invoke actions:
 - `ide.openChat`
 - `ide.openFilePicker`
 
-`ide.getCapabilities` result:
-- `{ capabilities: { "ide.openFile": boolean, "ide.openPath": boolean, "ide.openExternal": boolean, "ide.openChat": boolean, "ide.openFilePicker": boolean } }`
+### Host support matrix
 
-`ide.getHostInfo` result:
-- `{ host: { host: "vscode" | "cursor" | "trae" | "unknown", uriScheme: string, appName: string, isOfficialVsCode: boolean } }`
-- VSCode extension uses `vscode.env.uriScheme` as primary detection and `vscode.env.appName` as fallback.
-
-`ide.openFile` args:
-- `path: string` (absolute filesystem path, required)
-- `line?: number` (1-based, optional, default `1`)
-- `column?: number` (1-based, optional, default `1`)
-- `preview?: boolean` (optional, host best effort)
-- `preserveFocus?: boolean` (optional, host best effort)
-
-`ide.openFile` result:
-- `{ opened: true }`
-
-`ide.openPath` args:
-- `path: string` (absolute or relative filesystem path, required)
-- `line?: number` (1-based, optional)
-- `column?: number` (1-based, optional)
-- `preview?: boolean` (optional, host best effort for file opens)
-- `preserveFocus?: boolean` (optional, host best effort for file opens)
-
-`ide.openPath` result:
-- `{ opened: boolean }`
-- Open failures (unresolvable path, missing file, unsupported directory target) return `{ opened: false }` without raising host bridge errors.
-
-`ide.openExternal` args:
-- `url: string` (required, must be `http`/`https`)
-
-`ide.openExternal` result:
-- `{ opened: boolean }`
-- Invalid URLs or external-open failures return `{ opened: false }` without raising host bridge errors.
-
-`ide.openChat` args:
-- `query: string` (required, chat input text)
-- `isPartialQuery?: boolean` (optional, defaults to host behavior; for VSCode use `true` to fill input without sending)
-
-`ide.openChat` result:
-- `{ opened: boolean }`
-- Unsupported hosts or open failures return `{ opened: false }`.
-
-`ide.openFilePicker` args:
-- `canSelectFiles?: boolean` (optional, default `true`)
-- `canSelectFolders?: boolean` (optional, default `false`)
-- `canSelectMany?: boolean` (optional, default `false`)
-- `title?: string` (optional, host best effort)
-- `defaultPath?: string` (optional absolute filesystem path)
-- `filters?: Record<string, string[]>` (optional extension filters)
-
-`ide.openFilePicker` result:
-- `{ canceled: boolean, paths: string[] }`
-- Cancel returns `{ canceled: true, paths: [] }`.
-
-Host support (current):
-- Tauri desktop: `ide.openFilePicker` supported; `ide.openFile`, `ide.openPath`, `ide.openExternal`, and `ide.openChat` are currently unsupported.
-- VSCode extension: `ide.getHostInfo`, `ide.openFile`, `ide.openPath`, `ide.openExternal`, `ide.openChat`, and `ide.openFilePicker` all supported.
-- IntelliJ plugin: `ide.getHostInfo` supported (returns `unknown` host); `ide.openFile` supported; `ide.openPath`, `ide.openExternal`, `ide.openChat`, and `ide.openFilePicker` are advertised as unsupported (`false`) and return no-op results if invoked.
+- Tauri desktop:
+  - `ide.openFilePicker`: supported
+  - `ide.openFile`, `ide.openPath`, `ide.openExternal`, `ide.openChat`: unsupported
+- VSCode extension:
+  - All listed host actions supported
+  - `ide.getHostInfo` detects `vscode` / `cursor` / `trae` by URI scheme and app name
+- IntelliJ plugin:
+  - `ide.getCapabilities`, `ide.getHostInfo`, `ide.openFile`: supported
+  - `ide.openPath`, `ide.openExternal`, `ide.openChat`, `ide.openFilePicker`: intentionally no-op (`opened: false` or canceled picker)
 
 Host bridge error codes:
 - `UNSUPPORTED_HOST`
@@ -273,3 +244,14 @@ Host bridge error codes:
 - `FILE_NOT_FOUND`
 - `OPEN_FAILED`
 - `TIMEOUT`
+
+## Frontend bootstrap contract
+
+Hosts can provide one of:
+- `window.__HARMONY_BRIDGE__ = { host, wsUrl }`
+- query params: `?host=<host>&wsUrl=<ws-url>`
+
+`@harmony/webview-bridge` resolution order:
+1. `window.__HARMONY_BRIDGE__`
+2. query params
+3. environment fallback (`tauri` / `vscode` / `browser`)
