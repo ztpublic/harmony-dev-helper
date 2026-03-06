@@ -102,7 +102,9 @@ const TAURI_IDE_CAPABILITIES: IdeCapabilities = {
   "ide.openPath": false,
   "ide.openExternal": false,
   "ide.openChat": false,
-  "ide.openFilePicker": true
+  "ide.openFilePicker": true,
+  "ide.cursorMcp.addServer": false,
+  "ide.cursorMcp.removeServer": false
 };
 
 function normalizeTauriDialogFilters(value?: Record<string, string[]>): TauriDialogFilter[] | undefined {
@@ -203,7 +205,9 @@ function isIdeInvokeAction(value: unknown): value is IdeInvokeAction {
     value === "ide.openPath" ||
     value === "ide.openExternal" ||
     value === "ide.openChat" ||
-    value === "ide.openFilePicker"
+    value === "ide.openFilePicker" ||
+    value === "ide.cursorMcp.addServer" ||
+    value === "ide.cursorMcp.removeServer"
   );
 }
 

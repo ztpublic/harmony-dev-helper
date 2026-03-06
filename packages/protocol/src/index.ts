@@ -37,6 +37,8 @@ export interface IdeCapabilities {
   "ide.openExternal": boolean;
   "ide.openChat": boolean;
   "ide.openFilePicker": boolean;
+  "ide.cursorMcp.addServer": boolean;
+  "ide.cursorMcp.removeServer": boolean;
 }
 
 export type IdeHost = "vscode" | "cursor" | "trae" | "unknown";
@@ -82,6 +84,10 @@ export interface IdeOpenFilePickerArgs {
   filters?: Record<string, string[]>;
 }
 
+export interface IdeCursorMcpStatusResult {
+  added: boolean;
+}
+
 export type IdeInvokeAction =
   | "ide.getCapabilities"
   | "ide.getHostInfo"
@@ -89,7 +95,9 @@ export type IdeInvokeAction =
   | "ide.openPath"
   | "ide.openExternal"
   | "ide.openChat"
-  | "ide.openFilePicker";
+  | "ide.openFilePicker"
+  | "ide.cursorMcp.addServer"
+  | "ide.cursorMcp.removeServer";
 
 export interface IdeInvokeArgsByAction {
   "ide.getCapabilities": Record<string, never>;
@@ -99,6 +107,8 @@ export interface IdeInvokeArgsByAction {
   "ide.openExternal": IdeOpenExternalArgs;
   "ide.openChat": IdeOpenChatArgs;
   "ide.openFilePicker": IdeOpenFilePickerArgs;
+  "ide.cursorMcp.addServer": Record<string, never>;
+  "ide.cursorMcp.removeServer": Record<string, never>;
 }
 
 export interface IdeInvokeResultByAction {
@@ -109,6 +119,8 @@ export interface IdeInvokeResultByAction {
   "ide.openExternal": { opened: boolean };
   "ide.openChat": { opened: boolean };
   "ide.openFilePicker": { canceled: boolean; paths: string[] };
+  "ide.cursorMcp.addServer": IdeCursorMcpStatusResult;
+  "ide.cursorMcp.removeServer": IdeCursorMcpStatusResult;
 }
 
 type IdeInvokePayload = {

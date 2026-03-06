@@ -11,9 +11,39 @@ import type {
 } from "@harmony/protocol";
 import * as vscode from "vscode";
 
+declare module "vscode" {
+  export namespace cursor {
+    export namespace mcp {
+      export interface StdioServerConfig {
+        name: string;
+        server: {
+          command: string;
+          args: string[];
+          env: Record<string, string>;
+        };
+      }
+
+      export interface RemoteServerConfig {
+        name: string;
+        server: {
+          url: string;
+          headers?: Record<string, string>;
+        };
+      }
+
+      export type ExtMCPServerConfig = StdioServerConfig | RemoteServerConfig;
+
+      export const registerServer: (config: ExtMCPServerConfig) => void;
+      export const unregisterServer: (serverName: string) => void;
+    }
+  }
+}
+
 const BRIDGE_HOST = "127.0.0.1";
 const BRIDGE_PORT = 8788;
 const BRIDGE_WS_URL = `ws://${BRIDGE_HOST}:${BRIDGE_PORT}`;
+const HARMONY_MCP_PORT_OFFSET = 100;
+const HARMONY_CURSOR_MCP_SERVER_NAME = "harmony-dev-helper";
 const HARMONY_VIEW_ID = "harmony-main-view";
 const READY_TIMEOUT_MS = 8_000;
 const READY_POLL_INTERVAL_MS = 150;
@@ -31,7 +61,9 @@ type HostBridgeAction =
   | "ide.openPath"
   | "ide.openExternal"
   | "ide.openChat"
-  | "ide.openFilePicker";
+  | "ide.openFilePicker"
+  | "ide.cursorMcp.addServer"
+  | "ide.cursorMcp.removeServer";
 type HostBridgeErrorCode =
   | "UNSUPPORTED_HOST"
   | "INVALID_ARGS"
@@ -76,6 +108,15 @@ interface IdeOpenFilePickerArgs {
 interface IdeOpenFilePickerResult {
   canceled: boolean;
   paths: string[];
+}
+
+interface IdeCursorMcpStatusResult {
+  added: boolean;
+}
+
+interface CursorMcpApiNamespace {
+  registerServer: (config: vscode.cursor.mcp.ExtMCPServerConfig) => void;
+  unregisterServer: (serverName: string) => void;
 }
 
 function harmonyOpenInEditorTempRootPath(): string {
@@ -269,6 +310,34 @@ function stopBridgeProcess(output: vscode.OutputChannel): void {
   bridgeProcess = undefined;
 }
 
+function harmonyMcpServerUrl(): string {
+  return `http://${BRIDGE_HOST}:${BRIDGE_PORT + HARMONY_MCP_PORT_OFFSET}/mcp`;
+}
+
+function getCursorMcpApi(): CursorMcpApiNamespace | undefined {
+  const cursorApi = (
+    vscode as typeof vscode & {
+      cursor?: {
+        mcp?: Partial<CursorMcpApiNamespace>;
+      };
+    }
+  ).cursor?.mcp;
+
+  if (
+    !cursorApi ||
+    typeof cursorApi.registerServer !== "function" ||
+    typeof cursorApi.unregisterServer !== "function"
+  ) {
+    return undefined;
+  }
+
+  return cursorApi as CursorMcpApiNamespace;
+}
+
+function isCursorMcpSupported(hostInfo: IdeHostInfo): boolean {
+  return hostInfo.host === "cursor" && Boolean(getCursorMcpApi());
+}
+
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }
@@ -281,7 +350,9 @@ function isHostBridgeAction(value: unknown): value is HostBridgeAction {
     value === "ide.openPath" ||
     value === "ide.openExternal" ||
     value === "ide.openChat" ||
-    value === "ide.openFilePicker"
+    value === "ide.openFilePicker" ||
+    value === "ide.cursorMcp.addServer" ||
+    value === "ide.cursorMcp.removeServer"
   );
 }
 
@@ -373,7 +444,12 @@ function isHostBridgeInvokeMessage(value: unknown): value is HostBridgeInvokeMes
   return isObjectRecord(value.payload.args);
 }
 
-function createHostBridgeCapabilitiesResult(id: string): HostBridgeResultMessage {
+function createHostBridgeCapabilitiesResult(
+  id: string,
+  hostInfo: IdeHostInfo
+): HostBridgeResultMessage {
+  const cursorMcpSupported = isCursorMcpSupported(hostInfo);
+
   return {
     channel: HOST_BRIDGE_CHANNEL,
     id,
@@ -386,7 +462,9 @@ function createHostBridgeCapabilitiesResult(id: string): HostBridgeResultMessage
           "ide.openPath": true,
           "ide.openExternal": true,
           "ide.openChat": true,
-          "ide.openFilePicker": true
+          "ide.openFilePicker": true,
+          "ide.cursorMcp.addServer": cursorMcpSupported,
+          "ide.cursorMcp.removeServer": cursorMcpSupported
         }
       }
     }
@@ -473,6 +551,22 @@ function createHostBridgeOpenFilePickerResult(
     type: "result",
     payload: {
       action: "ide.openFilePicker",
+      data: result
+    }
+  };
+}
+
+function createHostBridgeCursorMcpStatusResult(
+  id: string,
+  action: "ide.cursorMcp.addServer" | "ide.cursorMcp.removeServer",
+  result: IdeCursorMcpStatusResult
+): HostBridgeResultMessage {
+  return {
+    channel: HOST_BRIDGE_CHANNEL,
+    id,
+    type: "result",
+    payload: {
+      action,
       data: result
     }
   };
@@ -901,7 +995,8 @@ async function handleHostBridgeInvoke(
   raw: unknown,
   webview: vscode.Webview,
   output: vscode.OutputChannel,
-  hostInfo: IdeHostInfo
+  hostInfo: IdeHostInfo,
+  context: vscode.ExtensionContext
 ): Promise<void> {
   if (!isHostBridgeInvokeMessage(raw)) {
     return;
@@ -912,13 +1007,89 @@ async function handleHostBridgeInvoke(
 
   if (action === "ide.getCapabilities") {
     output.appendLine("[host-bridge] ide.getCapabilities");
-    await webview.postMessage(createHostBridgeCapabilitiesResult(id));
+    await webview.postMessage(createHostBridgeCapabilitiesResult(id, hostInfo));
     return;
   }
 
   if (action === "ide.getHostInfo") {
     output.appendLine(`[host-bridge] ide.getHostInfo host=${hostInfo.host}`);
     await webview.postMessage(createHostBridgeHostInfoResult(id, hostInfo));
+    return;
+  }
+
+  if (action === "ide.cursorMcp.addServer") {
+    if (!isCursorMcpSupported(hostInfo)) {
+      await webview.postMessage(
+        createHostBridgeError(
+          id,
+          action,
+          "UNSUPPORTED_HOST",
+          "Cursor MCP integration is only available when running inside Cursor."
+        )
+      );
+      return;
+    }
+
+    try {
+      const cursorMcpApi = getCursorMcpApi();
+      if (!cursorMcpApi) {
+        throw new Error("Cursor MCP API is unavailable.");
+      }
+
+      await ensureBridgeStarted(context, output);
+      cursorMcpApi.registerServer({
+        name: HARMONY_CURSOR_MCP_SERVER_NAME,
+        server: {
+          url: harmonyMcpServerUrl()
+        }
+      });
+      output.appendLine(`[host-bridge] ide.cursorMcp.addServer url=${harmonyMcpServerUrl()}`);
+      await webview.postMessage(
+        createHostBridgeCursorMcpStatusResult(id, action, {
+          added: true
+        })
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      output.appendLine(`[host-bridge:OPEN_FAILED] ${message}`);
+      await webview.postMessage(createHostBridgeError(id, action, "OPEN_FAILED", message));
+    }
+
+    return;
+  }
+
+  if (action === "ide.cursorMcp.removeServer") {
+    if (!isCursorMcpSupported(hostInfo)) {
+      await webview.postMessage(
+        createHostBridgeError(
+          id,
+          action,
+          "UNSUPPORTED_HOST",
+          "Cursor MCP integration is only available when running inside Cursor."
+        )
+      );
+      return;
+    }
+
+    try {
+      const cursorMcpApi = getCursorMcpApi();
+      if (!cursorMcpApi) {
+        throw new Error("Cursor MCP API is unavailable.");
+      }
+
+      cursorMcpApi.unregisterServer(HARMONY_CURSOR_MCP_SERVER_NAME);
+      output.appendLine("[host-bridge] ide.cursorMcp.removeServer");
+      await webview.postMessage(
+        createHostBridgeCursorMcpStatusResult(id, action, {
+          added: false
+        })
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      output.appendLine(`[host-bridge:OPEN_FAILED] ${message}`);
+      await webview.postMessage(createHostBridgeError(id, action, "OPEN_FAILED", message));
+    }
+
     return;
   }
 
@@ -1077,7 +1248,7 @@ export function activate(context: vscode.ExtensionContext): void {
         };
 
         const onDidReceiveMessage = webviewView.webview.onDidReceiveMessage((raw) => {
-          void handleHostBridgeInvoke(raw, webviewView.webview, output, hostInfo);
+          void handleHostBridgeInvoke(raw, webviewView.webview, output, hostInfo, context);
         });
         context.subscriptions.push(onDidReceiveMessage);
 

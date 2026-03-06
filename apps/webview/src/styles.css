@@ -987,6 +987,47 @@ header,
   overflow-x: auto;
 }
 
+.mcp-tools-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  min-width: 0;
+}
+
+.mcp-tools-toolbar-button-primary,
+.mcp-tools-toolbar-button-secondary {
+  border-radius: var(--control-radius);
+  border: 1px solid var(--border-default);
+  background: var(--surface-control);
+  color: var(--text-primary);
+  height: var(--control-height);
+  padding: 0 var(--control-padding-x);
+  font-size: calc(0.85rem * var(--control-font-scale));
+  cursor: pointer;
+}
+
+.mcp-tools-toolbar-button-primary {
+  background: var(--accent-primary-bg);
+  border-color: var(--accent-primary-border);
+  color: var(--accent-primary-text);
+}
+
+.mcp-tools-toolbar-button-secondary:hover,
+.mcp-tools-toolbar-button-primary:hover {
+  background: var(--surface-control-hover);
+}
+
+.mcp-tools-toolbar-button-primary:hover {
+  background: var(--accent-primary-hover);
+  border-color: var(--accent-primary-hover);
+}
+
+.mcp-tools-toolbar-button-primary:disabled,
+.mcp-tools-toolbar-button-secondary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 .mcp-tools-table {
   width: 100%;
   border-collapse: collapse;
