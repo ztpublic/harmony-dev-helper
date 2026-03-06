@@ -1,5 +1,4 @@
 use std::path::{Path, PathBuf};
-
 use tokio::process::Command;
 
 use crate::error::HdcError;
@@ -19,27 +18,13 @@ impl ExecRunner {
     }
 
     pub async fn run(&self, args: &[String]) -> Result<String, HdcError> {
-        let mut command = Command::new(&self.bin);
-        command.arg("-t").arg(&self.connect_key);
-
-        for arg in args {
-            command.arg(arg);
-        }
-
-        let output = command.output().await?;
+        let output = self.build_command(args).output().await?;
         let stdout = String::from_utf8_lossy(&output.stdout).to_string();
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
         if !output.status.success() {
-            let mut full_command = vec![
-                self.bin.display().to_string(),
-                "-t".to_string(),
-                self.connect_key.clone(),
-            ];
-            full_command.extend(args.iter().cloned());
-
             return Err(HdcError::SubprocessFailure {
-                command: full_command.join(" "),
+                command: self.full_command(args).join(" "),
                 code: output.status.code(),
                 stdout,
                 stderr,
@@ -47,6 +32,27 @@ impl ExecRunner {
         }
 
         Ok(stdout)
+    }
+
+    fn build_command(&self, args: &[String]) -> Command {
+        let mut command = Command::new(&self.bin);
+        command.arg("-t").arg(&self.connect_key);
+
+        for arg in args {
+            command.arg(arg);
+        }
+
+        command
+    }
+
+    fn full_command(&self, args: &[String]) -> Vec<String> {
+        let mut full_command = vec![
+            self.bin.display().to_string(),
+            "-t".to_string(),
+            self.connect_key.clone(),
+        ];
+        full_command.extend(args.iter().cloned());
+        full_command
     }
 }
 

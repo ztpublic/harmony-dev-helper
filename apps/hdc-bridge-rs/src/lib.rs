@@ -342,7 +342,9 @@ fn required_absolute_path_arg(args: &Value, key: &str) -> Result<String, String>
     }
 
     if !path.starts_with('/') {
-        return Err(format!("`{key}` must be an absolute path starting with `/`"));
+        return Err(format!(
+            "`{key}` must be an absolute path starting with `/`"
+        ));
     }
 
     Ok(path.to_string())
@@ -378,9 +380,7 @@ fn shell_single_quote(value: &str) -> String {
 fn build_fs_list_shell_command(path: &str, include_hidden: bool) -> String {
     let flags = if include_hidden { "-A1p" } else { "-1p" };
     let escaped_path = shell_single_quote(path);
-    format!(
-        "ls {flags} -- {escaped_path} 2>&1; echo {FS_LIST_EXIT_SENTINEL_PREFIX}$?"
-    )
+    format!("ls {flags} -- {escaped_path} 2>&1; echo {FS_LIST_EXIT_SENTINEL_PREFIX}$?")
 }
 
 fn build_fs_delete_shell_command(path: &str) -> String {
@@ -424,7 +424,10 @@ fn build_fs_upload_remote_path(remote_directory: &str, local_path: &str) -> Resu
     Ok(join_device_path(remote_directory, &file_name))
 }
 
-fn build_fs_download_local_path(local_directory: &str, remote_path: &str) -> Result<PathBuf, String> {
+fn build_fs_download_local_path(
+    local_directory: &str,
+    remote_path: &str,
+) -> Result<PathBuf, String> {
     let file_name = device_path_basename(remote_path)
         .ok_or_else(|| "`remotePath` must include a file name".to_string())?;
     Ok(Path::new(local_directory).join(file_name))
@@ -468,12 +471,16 @@ fn parse_fs_list_output(parent_path: &str, output: &str) -> Result<Vec<HdcFsList
     let sentinel_index = lines
         .iter()
         .rposition(|line| line.trim_end().starts_with(FS_LIST_EXIT_SENTINEL_PREFIX))
-        .ok_or_else(|| "failed to parse filesystem listing result (missing exit sentinel)".to_string())?;
+        .ok_or_else(|| {
+            "failed to parse filesystem listing result (missing exit sentinel)".to_string()
+        })?;
 
     let sentinel_line = lines[sentinel_index].trim_end();
     let exit_code_raw = sentinel_line
         .strip_prefix(FS_LIST_EXIT_SENTINEL_PREFIX)
-        .ok_or_else(|| "failed to parse filesystem listing result (invalid exit sentinel)".to_string())?;
+        .ok_or_else(|| {
+            "failed to parse filesystem listing result (invalid exit sentinel)".to_string()
+        })?;
     let exit_code = exit_code_raw
         .parse::<i32>()
         .map_err(|_| "failed to parse filesystem listing result (invalid exit code)".to_string())?;
@@ -486,7 +493,9 @@ fn parse_fs_list_output(parent_path: &str, output: &str) -> Result<Vec<HdcFsList
     if exit_code != 0 {
         let message = listing_lines.join("\n").trim().to_string();
         if message.is_empty() {
-            return Err(format!("failed to list `{parent_path}` (exit code {exit_code})"));
+            return Err(format!(
+                "failed to list `{parent_path}` (exit code {exit_code})"
+            ));
         }
 
         return Err(message);
@@ -523,12 +532,16 @@ fn parse_fs_delete_output(target_path: &str, output: &str) -> Result<(), String>
     let sentinel_index = lines
         .iter()
         .rposition(|line| line.trim_end().starts_with(FS_DELETE_EXIT_SENTINEL_PREFIX))
-        .ok_or_else(|| "failed to parse filesystem delete result (missing exit sentinel)".to_string())?;
+        .ok_or_else(|| {
+            "failed to parse filesystem delete result (missing exit sentinel)".to_string()
+        })?;
 
     let sentinel_line = lines[sentinel_index].trim_end();
     let exit_code_raw = sentinel_line
         .strip_prefix(FS_DELETE_EXIT_SENTINEL_PREFIX)
-        .ok_or_else(|| "failed to parse filesystem delete result (invalid exit sentinel)".to_string())?;
+        .ok_or_else(|| {
+            "failed to parse filesystem delete result (invalid exit sentinel)".to_string()
+        })?;
     let exit_code = exit_code_raw
         .parse::<i32>()
         .map_err(|_| "failed to parse filesystem delete result (invalid exit code)".to_string())?;
@@ -541,7 +554,9 @@ fn parse_fs_delete_output(target_path: &str, output: &str) -> Result<(), String>
     if exit_code != 0 {
         let message = shell_lines.join("\n").trim().to_string();
         if message.is_empty() {
-            return Err(format!("failed to delete `{target_path}` (exit code {exit_code})"));
+            return Err(format!(
+                "failed to delete `{target_path}` (exit code {exit_code})"
+            ));
         }
 
         return Err(message);
@@ -1365,7 +1380,9 @@ async fn handle_fs_download_temp(id: String, args: Value) -> Envelope {
                     }
                 };
 
-                if let Err(message) = ensure_fs_download_temp_within_limit(metadata.len(), max_bytes) {
+                if let Err(message) =
+                    ensure_fs_download_temp_within_limit(metadata.len(), max_bytes)
+                {
                     remove_temp_file_if_exists(&local_path).await;
                     return hdc_error(id, message);
                 }
@@ -1829,11 +1846,12 @@ pub async fn run_bridge(ws_addr: &str) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_fs_delete_shell_command, build_fs_download_local_path, build_fs_list_shell_command,
-        build_fs_download_temp_local_path, build_fs_upload_remote_path, derive_default_mcp_http_addr,
-        ensure_fs_download_temp_utf8, ensure_fs_download_temp_within_limit, format_hilog_entry,
-        fs_download_temp_root_dir, join_device_path, kind_to_char, level_to_ansi, level_to_char,
-        optional_bool_arg, optional_positive_i64_arg, optional_string_arg, parse_fs_delete_output,
+        build_fs_delete_shell_command, build_fs_download_local_path,
+        build_fs_download_temp_local_path, build_fs_list_shell_command,
+        build_fs_upload_remote_path, derive_default_mcp_http_addr, ensure_fs_download_temp_utf8,
+        ensure_fs_download_temp_within_limit, format_hilog_entry, fs_download_temp_root_dir,
+        join_device_path, kind_to_char, level_to_ansi, level_to_char, optional_bool_arg,
+        optional_positive_i64_arg, optional_string_arg, parse_fs_delete_output,
         parse_fs_list_output, parse_hidumper_processes, remove_temp_file_if_exists,
         required_absolute_local_path_arg, shell_single_quote, HdcFsListEntry, HilogBatcher,
         HilogPidOption, BATCH_MAX_BYTES, BATCH_MAX_LINES, FS_DELETE_EXIT_SENTINEL_PREFIX,
@@ -2009,10 +2027,7 @@ mod tests {
     #[test]
     fn shell_single_quote_escapes_single_quotes() {
         assert_eq!(shell_single_quote("/data/log"), "'/data/log'");
-        assert_eq!(
-            shell_single_quote("/data/it's/log"),
-            "'/data/it'\\''s/log'"
-        );
+        assert_eq!(shell_single_quote("/data/it's/log"), "'/data/it'\\''s/log'");
     }
 
     #[test]
@@ -2049,8 +2064,8 @@ mod tests {
             .to_string();
 
         let args = json!({ "localPath": absolute_path });
-        let parsed =
-            required_absolute_local_path_arg(&args, "localPath").expect("expected valid absolute path");
+        let parsed = required_absolute_local_path_arg(&args, "localPath")
+            .expect("expected valid absolute path");
         assert_eq!(
             parsed,
             std::env::current_dir()
@@ -2063,7 +2078,10 @@ mod tests {
         let args = json!({ "localPath": "relative/file.txt" });
         let error = required_absolute_local_path_arg(&args, "localPath")
             .expect_err("relative local path must fail");
-        assert_eq!(error, "`localPath` must be an absolute local filesystem path");
+        assert_eq!(
+            error,
+            "`localPath` must be an absolute local filesystem path"
+        );
 
         let args = json!({ "localPath": format!("{absolute_path}\n") });
         let error = required_absolute_local_path_arg(&args, "localPath")
@@ -2114,7 +2132,8 @@ mod tests {
 
     #[test]
     fn ensure_fs_download_temp_within_limit_rejects_large_files() {
-        let error = ensure_fs_download_temp_within_limit(11, 10).expect_err("size check should fail");
+        let error =
+            ensure_fs_download_temp_within_limit(11, 10).expect_err("size check should fail");
         assert_eq!(
             error,
             "File is too large to open in editor (11 bytes > 10 bytes limit)"
@@ -2123,8 +2142,12 @@ mod tests {
 
     #[test]
     fn ensure_fs_download_temp_utf8_rejects_non_utf8_bytes() {
-        let error = ensure_fs_download_temp_utf8(&[0xff, 0xfe]).expect_err("utf-8 check should fail");
-        assert_eq!(error, "Only UTF-8 text files are supported for Open in Editor");
+        let error =
+            ensure_fs_download_temp_utf8(&[0xff, 0xfe]).expect_err("utf-8 check should fail");
+        assert_eq!(
+            error,
+            "Only UTF-8 text files are supported for Open in Editor"
+        );
     }
 
     #[tokio::test]
@@ -2218,15 +2241,19 @@ mod tests {
     #[test]
     fn parse_fs_delete_output_returns_shell_error_message() {
         let output = "rm: cannot remove '/data/nope': No such file or directory\n__HARMONY_FS_DELETE_EXIT:1\n";
-        let error = parse_fs_delete_output("/data/nope", output).expect_err("expected delete error");
-        assert_eq!(error, "rm: cannot remove '/data/nope': No such file or directory");
+        let error =
+            parse_fs_delete_output("/data/nope", output).expect_err("expected delete error");
+        assert_eq!(
+            error,
+            "rm: cannot remove '/data/nope': No such file or directory"
+        );
     }
 
     #[test]
     fn parse_fs_delete_output_rejects_missing_sentinel() {
         let output = "rm: output without sentinel\n";
-        let error = parse_fs_delete_output("/data/nope", output)
-            .expect_err("missing sentinel should fail");
+        let error =
+            parse_fs_delete_output("/data/nope", output).expect_err("missing sentinel should fail");
         assert_eq!(
             error,
             "failed to parse filesystem delete result (missing exit sentinel)"

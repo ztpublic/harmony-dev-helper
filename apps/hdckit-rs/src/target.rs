@@ -22,6 +22,91 @@ pub struct Target {
     ready_lock: Arc<Mutex<()>>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HilogQueryOptions {
+    pub regex: String,
+    pub head_lines: Option<u32>,
+    pub tail_lines: Option<u32>,
+    pub log_types: Option<String>,
+    pub level: Option<String>,
+    pub domain: Option<String>,
+    pub tag: Option<String>,
+    pub pid: Option<i64>,
+}
+
+impl HilogQueryOptions {
+    pub fn to_shell_args(&self) -> Result<Vec<String>, HdcError> {
+        let regex = normalize_required_hilog_filter(&self.regex, "regex")?;
+
+        if self.head_lines.is_some() && self.tail_lines.is_some() {
+            return Err(HdcError::InvalidInput(
+                "head_lines and tail_lines are mutually exclusive".to_string(),
+            ));
+        }
+
+        let mut args = vec!["hilog".to_string()];
+
+        if let Some(head_lines) = self.head_lines {
+            if head_lines == 0 {
+                return Err(HdcError::InvalidInput(
+                    "head_lines must be a positive integer".to_string(),
+                ));
+            }
+            args.push("-a".to_string());
+            args.push(head_lines.to_string());
+        }
+
+        if let Some(tail_lines) = self.tail_lines {
+            if tail_lines == 0 {
+                return Err(HdcError::InvalidInput(
+                    "tail_lines must be a positive integer".to_string(),
+                ));
+            }
+            args.push("-z".to_string());
+            args.push(tail_lines.to_string());
+        }
+
+        if let Some(log_types) = normalize_optional_hilog_filter(self.log_types.as_deref()) {
+            args.push("-t".to_string());
+            args.push(log_types);
+        }
+
+        if let Some(level) = normalize_optional_hilog_filter(self.level.as_deref()) {
+            args.push("-L".to_string());
+            args.push(level);
+        }
+
+        if let Some(domain) = normalize_optional_hilog_filter(self.domain.as_deref()) {
+            args.push("-D".to_string());
+            args.push(domain);
+        }
+
+        if let Some(tag) = normalize_optional_hilog_filter(self.tag.as_deref()) {
+            args.push("-T".to_string());
+            args.push(tag);
+        }
+
+        if let Some(pid) = self.pid {
+            if pid <= 0 {
+                return Err(HdcError::InvalidInput(
+                    "pid must be a positive integer".to_string(),
+                ));
+            }
+            args.push("-P".to_string());
+            args.push(pid.to_string());
+        }
+
+        args.push("-e".to_string());
+        args.push(regex);
+        args.push("-v".to_string());
+        args.push("epoch".to_string());
+        args.push("-v".to_string());
+        args.push("msec".to_string());
+
+        Ok(args)
+    }
+}
+
 impl Target {
     pub(crate) fn new(client: Client, connect_key: String) -> Self {
         Self {
@@ -220,6 +305,14 @@ impl Target {
         Ok(HilogStream::new(transport))
     }
 
+    pub async fn query_hilog(&self, options: &HilogQueryOptions) -> Result<String, HdcError> {
+        let shell_args = options.to_shell_args()?;
+        let command = build_hilog_query_command(&shell_args);
+        let mut session = self.shell(&command).await?;
+        let output = session.read_all_string().await?;
+        Ok(strip_hilog_transport_noise(&output))
+    }
+
     async fn transport(&self) -> Result<crate::connection::Connection, HdcError> {
         if !self.ready.load(Ordering::SeqCst) {
             self.wait_until_ready().await?;
@@ -278,13 +371,65 @@ fn build_hilog_command(level: Option<&str>, pid: Option<i64>) -> String {
     command
 }
 
+fn build_hilog_query_command(args: &[String]) -> String {
+    let mut iter = args.iter();
+    let mut command = iter.next().cloned().unwrap_or_default();
+
+    for arg in iter {
+        command.push(' ');
+        command.push_str(&shell_single_quote(arg));
+    }
+
+    command
+}
+
+fn strip_hilog_transport_noise(output: &str) -> String {
+    output
+        .lines()
+        .filter(|line| !is_hilog_transport_noise(line))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn is_hilog_transport_noise(line: &str) -> bool {
+    line.contains("/hdcd/HDC_LOG:")
+        && (line.contains("ExecuteCommand cmd:hilog")
+            || line.contains("[FetchCommand:")
+            || line.contains("[BeginRemoveTask:")
+            || line.contains("[ClearOwnTasks:")
+            || line.contains("taskClassDeleteRetry")
+            || line.contains("[DoRelease:"))
+}
+
 fn shell_single_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
+fn normalize_required_hilog_filter(value: &str, field_name: &str) -> Result<String, HdcError> {
+    let normalized = value.trim();
+    if normalized.is_empty() {
+        return Err(HdcError::InvalidInput(format!(
+            "{field_name} must be a non-empty string"
+        )));
+    }
+
+    Ok(normalized.to_string())
+}
+
+fn normalize_optional_hilog_filter(value: Option<&str>) -> Option<String> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::build_hilog_command;
+    use super::{
+        build_hilog_command, build_hilog_query_command, is_hilog_transport_noise,
+        strip_hilog_transport_noise, HilogQueryOptions,
+    };
+    use crate::error::HdcError;
 
     #[test]
     fn build_hilog_command_without_level_filter() {
@@ -324,6 +469,102 @@ mod tests {
         assert_eq!(
             build_hilog_command(Some("I,W,E"), Some(1234)),
             "hilog -v wrap -v epoch -L 'I,W,E' -P '1234'"
+        );
+    }
+
+    #[test]
+    fn hilog_query_args_include_filters_and_epoch_format() {
+        let options = HilogQueryOptions {
+            regex: "NullPointerException".to_string(),
+            tail_lines: Some(120),
+            level: Some("E,F".to_string()),
+            tag: Some("AbilityManager".to_string()),
+            pid: Some(4242),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            options.to_shell_args().unwrap(),
+            vec![
+                "hilog",
+                "-z",
+                "120",
+                "-L",
+                "E,F",
+                "-T",
+                "AbilityManager",
+                "-P",
+                "4242",
+                "-e",
+                "NullPointerException",
+                "-v",
+                "epoch",
+                "-v",
+                "msec",
+            ]
+        );
+    }
+
+    #[test]
+    fn hilog_query_args_reject_invalid_inputs() {
+        let empty_regex = HilogQueryOptions {
+            regex: "   ".to_string(),
+            ..Default::default()
+        };
+        assert!(matches!(
+            empty_regex.to_shell_args(),
+            Err(HdcError::InvalidInput(message)) if message.contains("regex")
+        ));
+
+        let invalid_window = HilogQueryOptions {
+            regex: "panic".to_string(),
+            head_lines: Some(10),
+            tail_lines: Some(10),
+            ..Default::default()
+        };
+        assert!(matches!(
+            invalid_window.to_shell_args(),
+            Err(HdcError::InvalidInput(message)) if message.contains("mutually exclusive")
+        ));
+
+        let invalid_pid = HilogQueryOptions {
+            regex: "panic".to_string(),
+            pid: Some(0),
+            ..Default::default()
+        };
+        assert!(matches!(
+            invalid_pid.to_shell_args(),
+            Err(HdcError::InvalidInput(message)) if message.contains("pid")
+        ));
+    }
+
+    #[test]
+    fn hilog_query_command_quotes_each_argument_for_shell_transport() {
+        assert_eq!(
+            build_hilog_query_command(&[
+                "hilog".to_string(),
+                "-z".to_string(),
+                "20".to_string(),
+                "-e".to_string(),
+                "panic 'quoted'".to_string(),
+            ]),
+            "hilog '-z' '20' '-e' 'panic '\"'\"'quoted'\"'\"''"
+        );
+    }
+
+    #[test]
+    fn hilog_transport_noise_filter_removes_shell_execution_artifacts() {
+        let output = "\
+1760766955.654 10654 27842 I C02D13/hdcd/HDC_LOG: [FetchCommand:1004] FetchCommand channelId:239872155 command:2\n\
+1760766955.655 10654 27842 I C02D13/hdcd/HDC_LOG: [ExecuteCommand:280] ExecuteCommand cmd:hilog -z 20 -e panic fd:47 pid:41225\n\
+1760766955.700  1689 24066 E C05741/softbus_server/TransSvc: NearbySocketReject# destroyList is empty.\n";
+
+        assert!(is_hilog_transport_noise(
+            "1760766955.655 10654 27842 I C02D13/hdcd/HDC_LOG: [ExecuteCommand:280] ExecuteCommand cmd:hilog -z 20 -e panic fd:47 pid:41225"
+        ));
+        assert_eq!(
+            strip_hilog_transport_noise(output),
+            "1760766955.700  1689 24066 E C05741/softbus_server/TransSvc: NearbySocketReject# destroyList is empty."
         );
     }
 }

@@ -37,8 +37,8 @@ Implemented today:
 - HDC binary config persistence at:
   - `~/.harmony-dev-helper/hdc-bridge.json`
 
-Current limitation:
-- MCP endpoint is infrastructure-only right now. Transport works, but HDC tool surface is not exposed yet.
+Current MCP coverage:
+- `hdc.search_hilog_logs`: search buffered device Hilog output with bounded `hdc shell hilog -z/-a ...` queries, optional filters, and automatic target selection when exactly one device is connected.
 
 ## Stack
 
@@ -174,6 +174,9 @@ When `--mcp-http-addr` is omitted, it is derived from WebSocket address:
 MCP endpoints:
 - `POST|GET|DELETE /mcp` (Streamable HTTP transport)
 - `GET /health` (returns `ok`)
+
+Current MCP tools:
+- `hdc.search_hilog_logs`
 
 ## Runtime channel model
 

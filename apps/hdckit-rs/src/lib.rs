@@ -14,6 +14,6 @@ pub use client::{Client, ClientOptions};
 pub use error::HdcError;
 pub use hilog::{HilogEntry, HilogStream};
 pub use shell::ShellSession;
-pub use target::Target;
+pub use target::{HilogQueryOptions, Target};
 pub use tracker::{TargetEvent, TargetTracker};
 pub use types::{ForwardMapping, Parameters};

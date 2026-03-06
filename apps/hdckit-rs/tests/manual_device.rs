@@ -97,7 +97,10 @@ async fn integration_core_parity() {
     let client = client();
     let target = first_target(&client).await;
 
-    let params = target.get_parameters().await.expect("get parameters failed");
+    let params = target
+        .get_parameters()
+        .await
+        .expect("get parameters failed");
     assert!(!params.is_empty(), "expected non-empty parameter map");
 
     let token = format!("hdc-lib-it-{}", unique_suffix());
@@ -175,10 +178,7 @@ async fn integration_hilog_stream_receives_entry() {
     let client = client();
     let target = first_target(&client).await;
 
-    let mut hilog = target
-        .open_hilog(false)
-        .await
-        .expect("open_hilog failed");
+    let mut hilog = target.open_hilog(false).await.expect("open_hilog failed");
 
     let entry = timeout(Duration::from_secs(15), hilog.next_entry())
         .await
