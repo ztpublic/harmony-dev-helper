@@ -1,0 +1,22 @@
+[package]
+name = "project-detector-rs"
+version = "0.1.0"
+edition = "2021"
+description = "Internal Rust crate for Harmony project detection"
+license = "MIT"
+
+[lib]
+name = "project_detector_rs"
+path = "src/lib.rs"
+
+[dependencies]
+path-clean = "1.0.1"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+serde_json5 = "0.2.1"
+strum = "0.27.2"
+strum_macros = "0.27.2"
+tree-sitter = "0.25.10"
+tree-sitter-json = "0.24.8"
+url = "2.5.7"
+walkdir = "2"
