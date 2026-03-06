@@ -15,6 +15,7 @@ export interface Envelope<TType extends string, TPayload> {
 
 export interface HostCapabilities {
   "host.getCapabilities": boolean;
+  "mcp.listTools": boolean;
   "hdc.listTargets": boolean;
   "hdc.getParameters": boolean;
   "hdc.shell": boolean;
@@ -230,8 +231,15 @@ export interface HdcHilogStateEventData {
   message?: string;
 }
 
+export interface McpToolSummary {
+  name: string;
+  title?: string;
+  description?: string;
+}
+
 export type InvokeAction =
   | "host.getCapabilities"
+  | "mcp.listTools"
   | "hdc.listTargets"
   | "hdc.getParameters"
   | "hdc.shell"
@@ -248,6 +256,7 @@ export type InvokeAction =
 
 export interface InvokeArgsByAction {
   "host.getCapabilities": Record<string, never>;
+  "mcp.listTools": Record<string, never>;
   "hdc.listTargets": Record<string, never>;
   "hdc.getParameters": { connectKey: string };
   "hdc.shell": { connectKey: string; command: string };
@@ -265,6 +274,7 @@ export interface InvokeArgsByAction {
 
 export interface InvokeResultByAction {
   "host.getCapabilities": { capabilities: HostCapabilities };
+  "mcp.listTools": { tools: McpToolSummary[] };
   "hdc.listTargets": { targets: string[] };
   "hdc.getParameters": { parameters: Record<string, string> };
   "hdc.shell": { output: string };

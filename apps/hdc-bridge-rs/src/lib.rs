@@ -17,7 +17,7 @@ mod hdc_bin;
 mod mcp;
 
 use hdc_bin::{build_hdc_client_from_config, get_bin_config, set_custom_bin_path};
-use mcp::run_mcp_http_server;
+use mcp::{list_builtin_mcp_tools, run_mcp_http_server};
 
 pub const DEFAULT_WS_ADDR: &str = "127.0.0.1:8787";
 
@@ -1532,6 +1532,7 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
               "data": {
                 "capabilities": {
                   "host.getCapabilities": true,
+                  "mcp.listTools": true,
                   "hdc.listTargets": true,
                   "hdc.getParameters": true,
                   "hdc.shell": true,
@@ -1546,6 +1547,16 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
                   "hdc.hilog.subscribe": true,
                   "hdc.hilog.unsubscribe": true
                 }
+              }
+            }),
+        ),
+        "mcp.listTools" => host_message(
+            id,
+            "event",
+            json!({
+              "name": "mcp.listTools.result",
+              "data": {
+                "tools": list_builtin_mcp_tools()
               }
             }),
         ),
@@ -1850,17 +1861,19 @@ mod tests {
         build_fs_download_temp_local_path, build_fs_list_shell_command,
         build_fs_upload_remote_path, derive_default_mcp_http_addr, ensure_fs_download_temp_utf8,
         ensure_fs_download_temp_within_limit, format_hilog_entry, fs_download_temp_root_dir,
-        join_device_path, kind_to_char, level_to_ansi, level_to_char, optional_bool_arg,
-        optional_positive_i64_arg, optional_string_arg, parse_fs_delete_output,
+        handle_invoke, join_device_path, kind_to_char, level_to_ansi, level_to_char,
+        optional_bool_arg, optional_positive_i64_arg, optional_string_arg, parse_fs_delete_output,
         parse_fs_list_output, parse_hidumper_processes, remove_temp_file_if_exists,
-        required_absolute_local_path_arg, shell_single_quote, HdcFsListEntry, HilogBatcher,
-        HilogPidOption, BATCH_MAX_BYTES, BATCH_MAX_LINES, FS_DELETE_EXIT_SENTINEL_PREFIX,
-        FS_LIST_EXIT_SENTINEL_PREFIX, QUEUE_MAX_LINES,
+        required_absolute_local_path_arg, shell_single_quote, ClientSession, HdcFsListEntry,
+        HilogBatcher, HilogPidOption, BATCH_MAX_BYTES, BATCH_MAX_LINES,
+        FS_DELETE_EXIT_SENTINEL_PREFIX, FS_LIST_EXIT_SENTINEL_PREFIX, OUTBOUND_QUEUE_CAPACITY,
+        QUEUE_MAX_LINES,
     };
     use hdckit_rs::HilogEntry;
     use serde_json::json;
     use std::path::Path;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
+    use tokio::sync::mpsc;
 
     fn build_entry(message: &str) -> HilogEntry {
         HilogEntry {
@@ -2315,6 +2328,55 @@ invalid row
                 }
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn handle_invoke_reports_mcp_list_tools_capability() {
+        let (outbound_tx, _outbound_rx) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+        let mut session = ClientSession::new(outbound_tx);
+
+        let response = handle_invoke(
+            "capabilities".to_string(),
+            json!({
+                "action": "host.getCapabilities",
+                "args": {}
+            }),
+            &mut session,
+        )
+        .await;
+
+        assert_eq!(response.kind, "event");
+        assert_eq!(response.payload["name"], "host.getCapabilities.result");
+        assert_eq!(
+            response.payload["data"]["capabilities"]["mcp.listTools"],
+            json!(true)
+        );
+    }
+
+    #[tokio::test]
+    async fn handle_invoke_returns_builtin_mcp_tool_summaries() {
+        let (outbound_tx, _outbound_rx) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+        let mut session = ClientSession::new(outbound_tx);
+
+        let response = handle_invoke(
+            "mcp-tools".to_string(),
+            json!({
+                "action": "mcp.listTools",
+                "args": {}
+            }),
+            &mut session,
+        )
+        .await;
+
+        assert_eq!(response.kind, "event");
+        assert_eq!(response.payload["name"], "mcp.listTools.result");
+
+        let tools = response.payload["data"]["tools"]
+            .as_array()
+            .expect("tools should be an array");
+        assert!(tools
+            .iter()
+            .any(|tool| tool["name"] == "hdc.search_hilog_logs"));
     }
 
     #[test]

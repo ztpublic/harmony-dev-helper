@@ -11,6 +11,7 @@ import { DeviceFileExplorerPanel } from "./features/filesystem/DeviceFileExplore
 import { useHdcBinConfig } from "./features/hdc/useHdcBinConfig";
 import { useHdcDeviceSelection } from "./features/hdc/useHdcDeviceSelection";
 import { HilogConsolePanel } from "./features/hilog/HilogConsolePanel";
+import { McpToolsPanel } from "./features/mcp/McpToolsPanel";
 import {
   DEFAULT_MAIN_PANEL_TAB_ID,
   MAIN_PANEL_TABS,
@@ -300,6 +301,12 @@ export default function App() {
         openLocalPathInEditor={openLocalPathInEditor}
         pickUploadFiles={pickUploadFiles}
         pickDownloadDirectory={pickDownloadDirectory}
+      />
+    ),
+    mcpTools: (
+      <McpToolsPanel
+        client={client}
+        connectionState={state}
       />
     )
   };

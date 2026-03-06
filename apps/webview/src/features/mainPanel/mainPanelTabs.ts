@@ -2,7 +2,8 @@ import type { HarmonyHost } from "@harmony/protocol";
 
 export const MAIN_PANEL_TABS = [
   { id: "hilog", label: "Hilog" },
-  { id: "fileExplorer", label: "File Explorer" }
+  { id: "fileExplorer", label: "File Explorer" },
+  { id: "mcpTools", label: "MCP tools" }
 ] as const;
 
 export type MainPanelTabId = (typeof MAIN_PANEL_TABS)[number]["id"];

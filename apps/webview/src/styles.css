@@ -971,6 +971,82 @@ header,
   color: var(--error-text);
 }
 
+.mcp-tools-panel {
+  align-content: start;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+
+.mcp-tools-table-shell {
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.mcp-tools-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: calc(0.78rem * var(--control-font-scale));
+}
+
+.mcp-tools-table th,
+.mcp-tools-table td {
+  padding: 0.45rem 0.6rem;
+  border-bottom: 1px solid var(--border-subtle);
+  vertical-align: top;
+  text-align: left;
+}
+
+.mcp-tools-table th {
+  color: var(--text-secondary);
+  font-size: calc(0.74rem * var(--control-font-scale));
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.mcp-tools-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+.mcp-tools-table th:first-child,
+.mcp-tools-table td:first-child {
+  width: min(34%, 260px);
+}
+
+.mcp-tool-cell {
+  display: grid;
+  gap: 0.18rem;
+}
+
+.mcp-tool-name {
+  width: fit-content;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 0.14rem 0.38rem;
+  border-radius: 6px;
+  background: var(--surface-control);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: calc(0.76rem * var(--control-font-scale));
+  font-family: "JetBrains Mono", "SF Mono", Menlo, monospace;
+}
+
+.mcp-tool-title {
+  color: var(--text-muted);
+  font-size: calc(0.76rem * var(--control-font-scale));
+}
+
+.mcp-tool-description {
+  color: var(--text-primary);
+  line-height: 1.4;
+}
+
 .file-system-panel {
   gap: 0.35rem;
   margin: 0;

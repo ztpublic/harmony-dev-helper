@@ -21,6 +21,16 @@ const MAX_HILOG_SEARCH_OUTPUT_BYTES: usize = 256 * 1024;
 #[cfg(test)]
 const HILOG_SEARCH_TOOL_NAME: &str = "hdc.search_hilog_logs";
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct McpToolSummary {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+}
+
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 struct HilogSearchToolRequest {
@@ -163,6 +173,26 @@ impl HarmonyMcpServer {
             pid: request.pid,
         }))
     }
+}
+
+pub(crate) fn list_builtin_mcp_tools() -> Vec<McpToolSummary> {
+    let mut tools = HarmonyMcpServer::new()
+        .tool_router
+        .list_all()
+        .into_iter()
+        .map(|tool| McpToolSummary {
+            name: tool.name.to_string(),
+            title: tool.title.or_else(|| {
+                tool.annotations
+                    .as_ref()
+                    .and_then(|annotations| annotations.title.clone())
+            }),
+            description: tool.description.map(|value| value.into_owned()),
+        })
+        .collect::<Vec<_>>();
+
+    tools.sort_by(|left, right| left.name.cmp(&right.name));
+    tools
 }
 
 #[tool_handler(router = self.tool_router)]
@@ -377,9 +407,9 @@ mod tests {
     use tower::util::ServiceExt;
 
     use super::{
-        apply_requested_line_window, build_mcp_router, count_lines, normalize_hilog_search_request,
-        truncate_utf8, HarmonyMcpServer, HilogSearchToolRequest, DEFAULT_HILOG_SEARCH_TAIL_LINES,
-        HILOG_SEARCH_TOOL_NAME,
+        apply_requested_line_window, build_mcp_router, count_lines, list_builtin_mcp_tools,
+        normalize_hilog_search_request, truncate_utf8, HarmonyMcpServer, HilogSearchToolRequest,
+        DEFAULT_HILOG_SEARCH_TAIL_LINES, HILOG_SEARCH_TOOL_NAME,
     };
 
     #[test]
@@ -453,6 +483,21 @@ mod tests {
             apply_requested_line_window("one\ntwo\nthree\nfour\n", None, Some(2)),
             "three\nfour"
         );
+    }
+
+    #[test]
+    fn builtin_mcp_tool_summaries_include_hilog_search_tool() {
+        let tools = list_builtin_mcp_tools();
+        let tool = tools
+            .iter()
+            .find(|tool| tool.name == HILOG_SEARCH_TOOL_NAME)
+            .expect("hilog search tool should be exported");
+
+        assert_eq!(tool.title.as_deref(), Some("Search Device Hilog Logs"));
+        assert!(tool
+            .description
+            .as_deref()
+            .is_some_and(|description| description.contains("Search buffered Hilog logs")));
     }
 
     #[tokio::test]
