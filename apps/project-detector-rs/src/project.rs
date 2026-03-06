@@ -1,7 +1,8 @@
+use crate::error::{DetectorError, Result};
 use crate::project_detector::ProjectDetector;
+use crate::utils::path::{path_is_dir, read_to_string};
 use crate::utils::uri::Uri;
-use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use walkdir::WalkDir;
 
@@ -30,16 +31,15 @@ impl Project {
         })
     }
 
-    pub fn find_all(project_detector: &Arc<ProjectDetector>) -> Vec<Arc<Project>> {
+    pub fn find_all(project_detector: &Arc<ProjectDetector>) -> Result<Vec<Arc<Project>>> {
         let mut projects = Vec::new();
-        let workspace_folder = project_detector.get_workspace_folder().fs_path();
-        let entries: Vec<_> = WalkDir::new(workspace_folder)
+        let workspace_folder = PathBuf::from(project_detector.get_workspace_folder().fs_path());
+
+        for entry in WalkDir::new(&workspace_folder)
             .into_iter()
             .filter_entry(|entry| !Self::is_in_exclude_dirs(entry))
-            .filter_map(|res| res.ok())
-            .collect();
-
-        for entry in entries {
+        {
+            let entry = entry.map_err(DetectorError::walkdir)?;
             let path = entry.path();
             if path
                 .file_name()
@@ -49,36 +49,35 @@ impl Project {
             {
                 let project_dir = path
                     .parent()
-                    .unwrap_or(Path::new(""))
-                    .to_string_lossy()
-                    .to_string();
-                if let Some(project) = Self::create(project_detector, project_dir) {
+                    .ok_or_else(|| DetectorError::InvalidFilePath {
+                        path: path.to_string_lossy().to_string(),
+                    })?;
+                if let Some(project) =
+                    Self::create(project_detector, project_dir.to_string_lossy().to_string())?
+                {
                     projects.push(project);
                 }
             }
         }
 
-        projects
+        Ok(projects)
     }
 
     pub fn create(
         project_detector: &Arc<ProjectDetector>,
         project_uri: String,
-    ) -> Option<Arc<Project>> {
-        let uri = Uri::file(project_uri);
-        if !fs::metadata(uri.fs_path())
-            .map(|m| m.is_dir())
-            .unwrap_or(false)
-        {
-            return None;
+    ) -> Result<Option<Arc<Project>>> {
+        let project_path = PathBuf::from(&project_uri);
+        if !path_is_dir(&project_path)? {
+            return Ok(None);
         }
 
-        let build_profile_path = Path::new(&uri.fs_path()).join("build-profile.json5");
-        let build_profile_uri = Uri::file(build_profile_path.to_string_lossy().to_string());
-        let build_profile_content =
-            fs::read_to_string(build_profile_uri.fs_path()).unwrap_or_default();
-        let parsed_build_profile: serde_json::Value =
-            serde_json5::from_str(&build_profile_content).unwrap_or_default();
+        let uri = Uri::file(&project_path)?;
+        let build_profile_path = project_path.join("build-profile.json5");
+        let build_profile_uri = Uri::file(&build_profile_path)?;
+        let build_profile_content = read_to_string(&build_profile_path)?;
+        let parsed_build_profile: serde_json::Value = serde_json5::from_str(&build_profile_content)
+            .map_err(|source| DetectorError::json5(build_profile_path.clone(), source))?;
 
         if parsed_build_profile.is_object()
             && parsed_build_profile.get("app").is_some_and(|app| {
@@ -89,24 +88,24 @@ impl Project {
                         .is_some()
             })
         {
-            Some(Arc::new(Project {
+            Ok(Some(Arc::new(Project {
                 project_detector: Arc::clone(project_detector),
                 uri,
                 parsed_build_profile,
                 build_profile_uri,
                 build_profile_content,
-            }))
+            })))
         } else {
-            None
+            Ok(None)
         }
     }
 
-    pub fn reload(&mut self) {
+    pub fn reload(&mut self) -> Result<()> {
         let project_uri = self.get_uri();
         let build_profile_path = Path::new(&project_uri.fs_path()).join("build-profile.json5");
-        let build_profile_content = fs::read_to_string(build_profile_path).unwrap_or_default();
-        let parsed_build_profile: serde_json::Value =
-            serde_json5::from_str(&build_profile_content).unwrap_or_default();
+        let build_profile_content = read_to_string(&build_profile_path)?;
+        let parsed_build_profile: serde_json::Value = serde_json5::from_str(&build_profile_content)
+            .map_err(|source| DetectorError::json5(build_profile_path.clone(), source))?;
         if !parsed_build_profile.is_object()
             || !parsed_build_profile.get("app").is_some_and(|app| {
                 app.is_object()
@@ -116,11 +115,14 @@ impl Project {
                         .is_some()
             })
         {
-            return;
+            return Err(DetectorError::InvalidProjectBuildProfile {
+                path: build_profile_path,
+            });
         }
 
         self.update_parsed_build_profile(parsed_build_profile);
         self.update_build_profile_content(build_profile_content);
+        Ok(())
     }
 
     pub fn get_uri(&self) -> Uri {

@@ -1,4 +1,5 @@
 pub mod element_directory;
+pub mod error;
 pub mod files;
 pub mod media_directory;
 pub mod module;

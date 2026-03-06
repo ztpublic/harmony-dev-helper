@@ -1,3 +1,5 @@
+use crate::error::{DetectorError, Result};
+use crate::utils::path::path_is_dir;
 use crate::{resource_directory::ResourceDirectory, utils::uri::Uri};
 use std::sync::Arc;
 use std::{fs, path::Path};
@@ -8,24 +10,18 @@ pub struct MediaDirectory {
 }
 
 impl MediaDirectory {
-    pub fn from(resource_directory: &Arc<ResourceDirectory>) -> Option<Arc<MediaDirectory>> {
-        let uri = Uri::file(
-            Path::new(&resource_directory.get_uri().fs_path())
-                .join("media")
-                .to_string_lossy()
-                .to_string(),
-        );
-        if !fs::metadata(uri.fs_path())
-            .map(|metadata| metadata.is_dir())
-            .unwrap_or(false)
-        {
-            return None;
+    pub fn from(
+        resource_directory: &Arc<ResourceDirectory>,
+    ) -> Result<Option<Arc<MediaDirectory>>> {
+        let media_directory_path = Path::new(&resource_directory.get_uri().fs_path()).join("media");
+        if !path_is_dir(&media_directory_path)? {
+            return Ok(None);
         }
 
-        Some(Arc::new(Self {
-            uri,
+        Ok(Some(Arc::new(Self {
+            uri: Uri::file(&media_directory_path)?,
             resource_directory: Arc::clone(resource_directory),
-        }))
+        })))
     }
 
     pub fn get_uri(&self) -> Uri {
@@ -36,24 +32,23 @@ impl MediaDirectory {
         Arc::clone(&self.resource_directory)
     }
 
-    pub fn find_all(&self) -> Vec<Uri> {
+    pub fn find_all(&self) -> Result<Vec<Uri>> {
         let mut media_files = Vec::new();
         let media_directory = self.get_uri();
-        let dirs = match fs::read_dir(media_directory.fs_path()) {
-            Ok(dirs) => dirs,
-            Err(_) => return media_files,
-        };
+        let dirs = fs::read_dir(media_directory.fs_path())
+            .map_err(|source| DetectorError::io(media_directory.fs_path(), source))?;
 
-        for dir in dirs.flatten() {
-            if dir
+        for dir in dirs {
+            let dir = dir.map_err(|source| DetectorError::io(media_directory.fs_path(), source))?;
+            let path = dir.path();
+            let metadata = dir
                 .metadata()
-                .map(|metadata| metadata.is_file())
-                .unwrap_or(false)
-            {
-                media_files.push(Uri::file(dir.path().to_string_lossy().to_string()));
+                .map_err(|source| DetectorError::io(path.clone(), source))?;
+            if metadata.is_file() {
+                media_files.push(Uri::file(&path)?);
             }
         }
 
-        media_files
+        Ok(media_files)
     }
 }

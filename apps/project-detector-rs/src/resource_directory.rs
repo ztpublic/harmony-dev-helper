@@ -1,9 +1,11 @@
+use crate::error::{DetectorError, Result};
 use crate::resource::Resource;
+use crate::utils::path::path_is_dir;
 use crate::utils::qualifier::utils_impl::QualifierUtils;
 use crate::utils::uri::Uri;
 use serde_json::Value;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub struct ResourceDirectory {
@@ -12,14 +14,12 @@ pub struct ResourceDirectory {
 }
 
 impl ResourceDirectory {
-    pub fn find_all(resource: &Arc<Resource>) -> Vec<Arc<ResourceDirectory>> {
+    pub fn find_all(resource: &Arc<Resource>) -> Result<Vec<Arc<ResourceDirectory>>> {
         let mut resource_directories = Vec::new();
         let resource_directory = resource.get_uri();
 
-        let dirs = match fs::read_dir(resource_directory.fs_path()) {
-            Ok(dirs) => dirs,
-            Err(_) => return resource_directories,
-        };
+        let dirs = fs::read_dir(resource_directory.fs_path())
+            .map_err(|source| DetectorError::io(resource_directory.fs_path(), source))?;
 
         for dir in dirs.flatten() {
             if dir
@@ -36,39 +36,39 @@ impl ResourceDirectory {
                     continue;
                 }
                 resource_directories.push(Arc::new(ResourceDirectory {
-                    uri: Uri::file(dir.path().to_string_lossy().to_string()),
+                    uri: Uri::file(dir.path())?,
                     resource: Arc::clone(resource),
                 }))
             }
         }
 
-        resource_directories
+        Ok(resource_directories)
     }
 
     pub fn create(
         resource: &Arc<Resource>,
         resource_directory_uri: String,
-    ) -> Option<Arc<ResourceDirectory>> {
-        let uri = Uri::file(resource_directory_uri);
-        if fs::metadata(uri.fs_path())
-            .map(|metadata| metadata.is_dir())
-            .unwrap_or(false)
-        {
-            let dir_name = Uri::base_name(&uri);
-            if dir_name != "base"
-                && dir_name != "rawfile"
-                && dir_name != "resfile"
-                && QualifierUtils::analyze_qualifier(dir_name).is_empty()
-            {
-                return None;
-            }
-            Some(Arc::new(ResourceDirectory {
-                uri,
-                resource: Arc::clone(resource),
-            }))
-        } else {
-            None
+    ) -> Result<Option<Arc<ResourceDirectory>>> {
+        let resource_directory_path = PathBuf::from(&resource_directory_uri);
+        if !path_is_dir(&resource_directory_path)? {
+            return Err(DetectorError::ExpectedDirectory {
+                path: resource_directory_path,
+            });
         }
+
+        let uri = Uri::file(&resource_directory_path)?;
+        let dir_name = Uri::base_name(&uri);
+        if dir_name != "base"
+            && dir_name != "rawfile"
+            && dir_name != "resfile"
+            && QualifierUtils::analyze_qualifier(dir_name).is_empty()
+        {
+            return Ok(None);
+        }
+        Ok(Some(Arc::new(ResourceDirectory {
+            uri,
+            resource: Arc::clone(resource),
+        })))
     }
 
     pub fn get_uri(&self) -> Uri {

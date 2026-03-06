@@ -1,6 +1,8 @@
+use crate::error::Result;
 use crate::module::Module;
+use crate::utils::path::resolve_within;
 use crate::utils::uri::Uri;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub struct Product {
@@ -63,20 +65,21 @@ impl Product {
             .clone()
     }
 
-    pub fn get_source_directories(&self) -> Vec<Uri> {
+    pub fn get_source_directories(&self) -> Result<Vec<Uri>> {
         let mut target_directories = Vec::new();
         let current_target_config = self.get_current_target_config();
         let name = self.get_name();
         let module_uri = self.module.get_uri();
 
         if current_target_config.is_null() {
-            return target_directories;
+            return Ok(target_directories);
         }
 
         let default_child_path = if name == "default" { "main" } else { &name };
-        let default_source_root = Path::new(&module_uri.fs_path())
-            .join("src")
-            .join(default_child_path);
+        let default_source_root = resolve_within(
+            Path::new(&module_uri.fs_path()),
+            &PathBuf::from("src").join(default_child_path),
+        )?;
         let source_roots = current_target_config
             .get("source")
             .and_then(|source| source.get("sourceRoots"))
@@ -84,61 +87,62 @@ impl Product {
 
         if let Some(source_roots) = source_roots {
             if source_roots.is_empty() {
-                target_directories
-                    .push(Uri::file(default_source_root.to_string_lossy().to_string()));
+                target_directories.push(Uri::file(&default_source_root)?);
             } else {
                 for source_root in source_roots {
-                    let source_root_path = path_clean::clean(
-                        Path::new(&module_uri.fs_path())
-                            .join(source_root.as_str().unwrap_or_default()),
-                    );
-                    target_directories
-                        .push(Uri::file(source_root_path.to_string_lossy().to_string()));
+                    let source_root_path = resolve_within(
+                        Path::new(&module_uri.fs_path()),
+                        Path::new(source_root.as_str().unwrap_or_default()),
+                    )?;
+                    target_directories.push(Uri::file(&source_root_path)?);
                 }
             }
         } else {
-            target_directories.push(Uri::file(default_source_root.to_string_lossy().to_string()));
+            target_directories.push(Uri::file(&default_source_root)?);
         }
 
-        target_directories
+        Ok(target_directories)
     }
 
-    pub fn get_current_target_directory(&self) -> Uri {
+    pub fn get_current_target_directory(&self) -> Result<Uri> {
         let name = self.get_name();
         let default_child_path = if name == "default" { "main" } else { &name };
-        let target_directory = Path::new(&self.module.get_uri().fs_path())
-            .join("src")
-            .join(default_child_path);
-        Uri::file(target_directory.to_string_lossy().to_string())
+        let target_directory = resolve_within(
+            Path::new(&self.module.get_uri().fs_path()),
+            &PathBuf::from("src").join(default_child_path),
+        )?;
+        Uri::file(&target_directory)
     }
 
-    pub fn get_module_json5_path(&self) -> Uri {
-        let target_directory = self.get_current_target_directory();
+    pub fn get_module_json5_path(&self) -> Result<Uri> {
+        let target_directory = self.get_current_target_directory()?;
         let module_json5_path = Path::new(&target_directory.fs_path()).join("module.json5");
-        Uri::file(module_json5_path.to_string_lossy().to_string())
+        Uri::file(&module_json5_path)
     }
 
-    pub fn get_config_json_path(&self) -> Uri {
-        let target_directory = self.get_current_target_directory();
+    pub fn get_config_json_path(&self) -> Result<Uri> {
+        let target_directory = self.get_current_target_directory()?;
         let config_json_path = Path::new(&target_directory.fs_path()).join("config.json");
-        Uri::file(config_json_path.to_string_lossy().to_string())
+        Uri::file(&config_json_path)
     }
 
-    pub fn get_resource_directories(&self) -> Vec<Uri> {
+    pub fn get_resource_directories(&self) -> Result<Vec<Uri>> {
         let mut target_directories = Vec::new();
         let current_target_config = self.get_current_target_config();
         let name = self.get_name();
         let module_uri = self.module.get_uri();
 
         if current_target_config.is_null() {
-            return target_directories;
+            return Ok(target_directories);
         }
 
         let default_child_path = if name == "default" { "main" } else { &name };
-        let default_resource_root = Path::new(&module_uri.fs_path())
-            .join("src")
-            .join(default_child_path)
-            .join("resources");
+        let default_resource_root = resolve_within(
+            Path::new(&module_uri.fs_path()),
+            &PathBuf::from("src")
+                .join(default_child_path)
+                .join("resources"),
+        )?;
         let resource_roots = current_target_config
             .get("resource")
             .and_then(|resource| resource.get("directories"))
@@ -146,25 +150,20 @@ impl Product {
 
         if let Some(resource_roots) = resource_roots {
             if resource_roots.is_empty() {
-                target_directories.push(Uri::file(
-                    default_resource_root.to_string_lossy().to_string(),
-                ));
+                target_directories.push(Uri::file(&default_resource_root)?);
             } else {
                 for resource_root in resource_roots {
-                    let resource_root_path = path_clean::clean(
-                        Path::new(&module_uri.fs_path())
-                            .join(resource_root.as_str().unwrap_or_default()),
-                    );
-                    target_directories
-                        .push(Uri::file(resource_root_path.to_string_lossy().to_string()));
+                    let resource_root_path = resolve_within(
+                        Path::new(&module_uri.fs_path()),
+                        Path::new(resource_root.as_str().unwrap_or_default()),
+                    )?;
+                    target_directories.push(Uri::file(&resource_root_path)?);
                 }
             }
         } else {
-            target_directories.push(Uri::file(
-                default_resource_root.to_string_lossy().to_string(),
-            ));
+            target_directories.push(Uri::file(&default_resource_root)?);
         }
 
-        target_directories
+        Ok(target_directories)
     }
 }

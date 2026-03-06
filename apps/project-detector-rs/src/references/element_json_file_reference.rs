@@ -1,4 +1,6 @@
+use crate::error::{DetectorError, Result};
 use crate::files::element_json_file::ElementJsonFile;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub struct ElementJsonFileReference {
@@ -40,11 +42,31 @@ impl ElementJsonFileReference {
         source_code[..byte_offset].chars().count()
     }
 
-    pub fn find_all(element_json_file: &Arc<ElementJsonFile>) -> Vec<ElementJsonFileReference> {
+    fn path(element_json_file: &ElementJsonFile) -> PathBuf {
+        PathBuf::from(element_json_file.get_uri().fs_path())
+    }
+
+    fn node_text(node: tree_sitter::Node<'_>, source_code: &str, path: &Path) -> Result<String> {
+        node.utf8_text(source_code.as_bytes())
+            .map(|text| text.to_string())
+            .map_err(|source| DetectorError::InvalidUtf8Text {
+                path: path.to_path_buf(),
+                message: source.to_string(),
+            })
+    }
+
+    pub fn find_all(
+        element_json_file: &Arc<ElementJsonFile>,
+    ) -> Result<Vec<ElementJsonFileReference>> {
         let mut reference = Vec::new();
         let parser = element_json_file.get_parser();
         let source_code = element_json_file.get_content();
-        let tree = parser.lock().unwrap().parse(&source_code, None).unwrap();
+        let path = Self::path(element_json_file);
+        let tree = parser
+            .lock()
+            .map_err(|_| DetectorError::ParserPoisoned { path: path.clone() })?
+            .parse(&source_code, None)
+            .ok_or_else(|| DetectorError::TreeSitterParse { path: path.clone() })?;
 
         for child in tree.root_node().children(&mut tree.root_node().walk()) {
             if child.kind() != "object" {
@@ -60,10 +82,7 @@ impl ElementJsonFileReference {
                 for element_type_value in element_type_key.children(&mut element_type_key.walk()) {
                     if element_type_value.kind() == "string" {
                         current_element_type =
-                            match element_type_value.utf8_text(source_code.as_bytes()) {
-                                Ok(text) => text.to_string(),
-                                Err(_) => continue,
-                            };
+                            Self::node_text(element_type_value, &source_code, &path)?;
                         continue;
                     }
                     if element_type_value.kind() != "array" {
@@ -100,11 +119,7 @@ impl ElementJsonFileReference {
                             if filtered_nodes.len() != 2 {
                                 continue;
                             }
-                            let key_text = match filtered_nodes[0].utf8_text(source_code.as_bytes())
-                            {
-                                Ok(text) => text,
-                                Err(_) => continue,
-                            };
+                            let key_text = Self::node_text(filtered_nodes[0], &source_code, &path)?;
                             if key_text == "\"name\"" {
                                 name_start = Some(Self::byte_to_char_index(
                                     &source_code,
@@ -114,12 +129,8 @@ impl ElementJsonFileReference {
                                     &source_code,
                                     filtered_nodes[1].end_byte(),
                                 ));
-                                name_text = Some(
-                                    match filtered_nodes[1].utf8_text(source_code.as_bytes()) {
-                                        Ok(text) => text.to_string(),
-                                        Err(_) => continue,
-                                    },
-                                );
+                                name_text =
+                                    Some(Self::node_text(filtered_nodes[1], &source_code, &path)?);
                             } else if key_text == "\"value\"" {
                                 value_start = Some(Self::byte_to_char_index(
                                     &source_code,
@@ -129,12 +140,8 @@ impl ElementJsonFileReference {
                                     &source_code,
                                     filtered_nodes[1].end_byte(),
                                 ));
-                                value_text = Some(
-                                    match filtered_nodes[1].utf8_text(source_code.as_bytes()) {
-                                        Ok(text) => text.to_string(),
-                                        Err(_) => continue,
-                                    },
-                                );
+                                value_text =
+                                    Some(Self::node_text(filtered_nodes[1], &source_code, &path)?);
                             } else {
                                 continue;
                             }
@@ -171,7 +178,7 @@ impl ElementJsonFileReference {
             }
         }
 
-        reference
+        Ok(reference)
     }
 
     pub fn get_element_json_file(&self) -> Arc<ElementJsonFile> {

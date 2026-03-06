@@ -1,0 +1,9 @@
+{
+  app: {},
+  modules: [
+    {
+      name: "entry",
+      srcPath: "entry",
+    },
+  ],
+}

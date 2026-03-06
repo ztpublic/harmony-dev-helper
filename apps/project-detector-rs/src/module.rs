@@ -1,7 +1,8 @@
+use crate::error::{DetectorError, Result};
 use crate::project::Project;
+use crate::utils::path::{read_to_string, resolve_within};
 use crate::utils::uri::Uri;
-use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 pub struct Module {
@@ -14,22 +15,25 @@ pub struct Module {
 }
 
 impl Module {
-    pub fn create(project: &Arc<Project>, module_uri: String) -> Option<Arc<Module>> {
-        let uri = Uri::file(module_uri);
-        let build_profile_path = Path::new(&uri.fs_path()).join("build-profile.json5");
-        let build_profile_uri = Uri::file(build_profile_path.to_string_lossy().to_string());
-        let build_profile_content = fs::read_to_string(build_profile_path).unwrap_or_default();
-        let parsed_build_profile: serde_json::Value =
-            serde_json5::from_str(&build_profile_content).unwrap_or_default();
+    pub fn create(project: &Arc<Project>, module_uri: String) -> Result<Arc<Module>> {
+        let module_path = PathBuf::from(&module_uri);
+        let uri = Uri::file(&module_path)?;
+        let build_profile_path = module_path.join("build-profile.json5");
+        let build_profile_uri = Uri::file(&build_profile_path)?;
+        let build_profile_content = read_to_string(&build_profile_path)?;
+        let parsed_build_profile: serde_json::Value = serde_json5::from_str(&build_profile_content)
+            .map_err(|source| DetectorError::json5(build_profile_path.clone(), source))?;
         if !parsed_build_profile.is_object()
             || !parsed_build_profile
                 .get("targets")
                 .is_some_and(|targets| targets.is_array())
         {
-            return None;
+            return Err(DetectorError::InvalidModuleBuildProfile {
+                path: build_profile_path,
+            });
         }
 
-        Some(Arc::new(Module {
+        Ok(Arc::new(Module {
             module_name: Self::extract_module_name(&parsed_build_profile),
             uri,
             project: Arc::clone(project),
@@ -39,7 +43,7 @@ impl Module {
         }))
     }
 
-    pub fn find_all(project: &Arc<Project>) -> Vec<Arc<Module>> {
+    pub fn find_all(project: &Arc<Project>) -> Result<Vec<Arc<Module>>> {
         let parsed_build_profile = project.get_parsed_build_profile();
         let mut modules = Vec::new();
 
@@ -48,35 +52,36 @@ impl Module {
             .and_then(|modules| modules.as_array())
         {
             Some(array) => array,
-            None => return modules,
+            None => return Ok(modules),
         };
 
         for module_config in modules_array {
-            let uri = Self::build_module_uri(project, module_config);
-            if let Some(module) = Self::create(project, uri.to_string()) {
-                modules.push(module);
-            }
+            let uri = Self::build_module_uri(project, module_config)?;
+            modules.push(Self::create(project, uri.fs_path())?);
         }
 
-        modules
+        Ok(modules)
     }
 
-    pub fn reload(&mut self) {
+    pub fn reload(&mut self) -> Result<()> {
         let module_uri = self.get_uri();
         let build_profile_path = Path::new(&module_uri.fs_path()).join("build-profile.json5");
-        let build_profile_content = fs::read_to_string(build_profile_path).unwrap_or_default();
-        let parsed_build_profile: serde_json::Value =
-            serde_json5::from_str(&build_profile_content).unwrap_or_default();
+        let build_profile_content = read_to_string(&build_profile_path)?;
+        let parsed_build_profile: serde_json::Value = serde_json5::from_str(&build_profile_content)
+            .map_err(|source| DetectorError::json5(build_profile_path.clone(), source))?;
         if !parsed_build_profile.is_object()
             || !parsed_build_profile
                 .get("targets")
                 .is_some_and(|targets| targets.is_array())
         {
-            return;
+            return Err(DetectorError::InvalidModuleBuildProfile {
+                path: build_profile_path,
+            });
         }
 
         self.update_parsed_build_profile(parsed_build_profile);
         self.update_build_profile_content(build_profile_content);
+        Ok(())
     }
 
     pub fn get_uri(&self) -> Uri {
@@ -121,19 +126,16 @@ impl Module {
             .to_string()
     }
 
-    fn build_module_uri(project: &Project, module_config: &serde_json::Value) -> Uri {
+    fn build_module_uri(project: &Project, module_config: &serde_json::Value) -> Result<Uri> {
         let project_path = project.get_uri().fs_path();
         let src_path = module_config
             .get("srcPath")
             .and_then(|path| path.as_str())
-            .unwrap_or("");
-        let full_path = path_clean::clean(
-            Path::new(&project_path)
-                .join(src_path)
-                .to_string_lossy()
-                .to_string(),
-        );
+            .ok_or_else(|| DetectorError::InvalidProjectBuildProfile {
+                path: PathBuf::from(project.get_build_profile_uri().fs_path()),
+            })?;
+        let full_path = resolve_within(Path::new(&project_path), Path::new(src_path))?;
 
-        Uri::file(full_path.to_string_lossy().to_string())
+        Uri::file(&full_path)
     }
 }

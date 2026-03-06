@@ -1,6 +1,8 @@
+use crate::error::{DetectorError, Result};
+use crate::utils::path::path_is_dir;
 use crate::{resource::Resource, utils::uri::Uri};
+use std::path::Path;
 use std::sync::Arc;
-use std::{fs, path::Path};
 use walkdir::WalkDir;
 
 pub struct ResfileDirectory {
@@ -9,24 +11,16 @@ pub struct ResfileDirectory {
 }
 
 impl ResfileDirectory {
-    pub fn from(resource: &Arc<Resource>) -> Option<Arc<ResfileDirectory>> {
-        let uri = Uri::file(
-            Path::new(&resource.get_uri().fs_path())
-                .join("resfile")
-                .to_string_lossy()
-                .to_string(),
-        );
-        if !fs::metadata(uri.fs_path())
-            .map(|metadata| metadata.is_dir())
-            .unwrap_or(false)
-        {
-            return None;
+    pub fn from(resource: &Arc<Resource>) -> Result<Option<Arc<ResfileDirectory>>> {
+        let resfile_directory_path = Path::new(&resource.get_uri().fs_path()).join("resfile");
+        if !path_is_dir(&resfile_directory_path)? {
+            return Ok(None);
         }
 
-        Some(Arc::new(ResfileDirectory {
-            uri,
+        Ok(Some(Arc::new(ResfileDirectory {
+            uri: Uri::file(&resfile_directory_path)?,
             resource: Arc::clone(resource),
-        }))
+        })))
     }
 
     pub fn get_uri(&self) -> Uri {
@@ -37,13 +31,15 @@ impl ResfileDirectory {
         Arc::clone(&self.resource)
     }
 
-    pub fn find_all(&self) -> Vec<Uri> {
+    pub fn find_all(&self) -> Result<Vec<Uri>> {
         let resfile_directory = self.get_uri();
-        WalkDir::new(resfile_directory.fs_path())
-            .into_iter()
-            .filter_map(|res| res.ok())
-            .filter(|entry| entry.file_type().is_file())
-            .map(|entry| Uri::file(entry.path().to_string_lossy().to_string()))
-            .collect()
+        let mut files = Vec::new();
+        for entry in WalkDir::new(resfile_directory.fs_path()) {
+            let entry = entry.map_err(DetectorError::walkdir)?;
+            if entry.file_type().is_file() {
+                files.push(Uri::file(entry.path())?);
+            }
+        }
+        Ok(files)
     }
 }

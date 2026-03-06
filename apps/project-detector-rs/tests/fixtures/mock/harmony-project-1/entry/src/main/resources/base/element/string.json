@@ -1,0 +1,12 @@
+{
+  "string": [
+    {
+      "name": "app_name",
+      "value": "Harmony Project 1"
+    },
+    {
+      "name": "welcome_text",
+      "value": "Welcome"
+    }
+  ]
+}

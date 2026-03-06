@@ -1,4 +1,5 @@
-use std::{fmt, path};
+use crate::error::{DetectorError, Result};
+use std::{env, fmt, path};
 use url::Url;
 
 #[derive(Clone, PartialEq, Eq)]
@@ -8,23 +9,47 @@ pub struct Uri {
 }
 
 impl Uri {
-    pub fn file(path: String) -> Self {
-        let url = Url::from_file_path(&path)
-            .unwrap_or(Url::parse(&path).unwrap_or(Url::parse("file://").unwrap()));
+    pub fn file(path: impl AsRef<path::Path>) -> Result<Self> {
+        let path = Self::absolute_path(path.as_ref())?;
+        let url = Url::from_file_path(&path).map_err(|_| DetectorError::InvalidFilePath {
+            path: path.to_string_lossy().to_string(),
+        })?;
 
-        Self {
-            fs_path: url.to_file_path().unwrap_or_default(),
-            url,
+        Ok(Self { fs_path: path, url })
+    }
+
+    pub fn parse(url: impl AsRef<str>) -> Result<Self> {
+        let input = url.as_ref();
+        let url = Url::parse(input).map_err(|source| DetectorError::UriParse {
+            input: input.to_string(),
+            source,
+        })?;
+        if url.scheme() != "file" {
+            return Err(DetectorError::UnsupportedUriScheme {
+                uri: input.to_string(),
+            });
+        }
+        let fs_path = url
+            .to_file_path()
+            .map_err(|_| DetectorError::InvalidFilePath {
+                path: input.to_string(),
+            })?;
+
+        Ok(Self { fs_path, url })
+    }
+
+    pub fn from_path_or_uri(value: impl AsRef<str>) -> Result<Self> {
+        let value = value.as_ref();
+        match Url::parse(value) {
+            Ok(_) => Self::parse(value),
+            Err(source) if value.contains("://") => Err(DetectorError::UriParse {
+                input: value.to_string(),
+                source,
+            }),
+            Err(_) => Self::file(path::Path::new(value)),
         }
     }
-    pub fn parse(url: String) -> Self {
-        let url = Url::parse(&url).unwrap_or(Url::parse("file://").unwrap());
 
-        Self {
-            fs_path: url.to_file_path().unwrap_or_default(),
-            url,
-        }
-    }
     pub fn base_name(uri: &Uri) -> String {
         uri.url
             .path_segments()
@@ -32,13 +57,14 @@ impl Uri {
             .unwrap_or_default()
             .to_string()
     }
-    pub fn dir_name(uri: &Uri) -> Uri {
+    pub fn dir_name(uri: &Uri) -> Result<Uri> {
         let path = path::Path::new(&uri.fs_path);
-        Uri::file(
-            path.parent()
-                .map(|p| p.to_string_lossy().to_string())
-                .unwrap_or_else(|| ".".to_string()),
-        )
+        let parent = path
+            .parent()
+            .ok_or_else(|| DetectorError::InvalidFilePath {
+                path: path.to_string_lossy().to_string(),
+            })?;
+        Uri::file(parent)
     }
     pub fn is_equal(&self, other: &Uri) -> bool {
         self.fs_path == other.fs_path || self.to_string() == other.to_string()
@@ -83,6 +109,15 @@ impl Uri {
     #[allow(clippy::inherent_to_string_shadow_display)]
     pub fn to_string(&self) -> String {
         self.url.to_string()
+    }
+
+    fn absolute_path(path: &path::Path) -> Result<path::PathBuf> {
+        if path.is_absolute() {
+            return Ok(path.to_path_buf());
+        }
+
+        let cwd = env::current_dir().map_err(|source| DetectorError::io(".", source))?;
+        Ok(path_clean::clean(cwd.join(path)))
     }
 }
 
