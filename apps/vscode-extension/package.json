@@ -8,8 +8,19 @@
     "vscode": "^1.95.0"
   },
   "main": "./out/extension.js",
-  "activationEvents": ["onView:harmony-main-view"],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:harmony.openHelperView",
+    "onView:harmony-main-view"
+  ],
   "contributes": {
+    "commands": [
+      {
+        "command": "harmony.openHelperView",
+        "title": "Open Harmony Helper View",
+        "category": "Harmony"
+      }
+    ],
     "viewsContainers": {
       "panel": [
         {

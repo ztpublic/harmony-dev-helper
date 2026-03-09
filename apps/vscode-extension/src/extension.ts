@@ -44,7 +44,10 @@ const BRIDGE_PORT = 8788;
 const BRIDGE_WS_URL = `ws://${BRIDGE_HOST}:${BRIDGE_PORT}`;
 const HARMONY_MCP_PORT_OFFSET = 100;
 const HARMONY_CURSOR_MCP_SERVER_NAME = "harmony-dev-helper";
+const HARMONY_PANEL_ID = "harmony-panel";
 const HARMONY_VIEW_ID = "harmony-main-view";
+const OPEN_HARMONY_HELPER_VIEW_COMMAND_ID = "harmony.openHelperView";
+const HARMONY_VIEW_OPENED_STATE_KEY = "harmony.hasOpenedHelperView";
 const READY_TIMEOUT_MS = 8_000;
 const READY_POLL_INTERVAL_MS = 150;
 const HOST_BRIDGE_CHANNEL = "harmony-host";
@@ -1201,6 +1204,29 @@ function buildWebviewHtml(webview: vscode.Webview, extensionUri: vscode.Uri): st
 </html>`;
 }
 
+function createOpenHarmonyViewStatusBarItem(): vscode.StatusBarItem {
+  const item = vscode.window.createStatusBarItem(
+    "harmony.openHelperView.statusBar",
+    vscode.StatusBarAlignment.Left,
+    1_000
+  );
+
+  item.name = "Open Harmony Helper View";
+  item.text = "Open Harmony Helper View";
+  item.tooltip = "Open the Harmony Helper view.";
+  item.command = OPEN_HARMONY_HELPER_VIEW_COMMAND_ID;
+
+  return item;
+}
+
+async function openHarmonyHelperView(webviewView: vscode.WebviewView | undefined): Promise<void> {
+  await vscode.commands.executeCommand(`workbench.view.extension.${HARMONY_PANEL_ID}`);
+
+  if (webviewView) {
+    webviewView.show(false);
+  }
+}
+
 function cleanupTrackedHarmonyTempFiles(output?: vscode.OutputChannel): void {
   let removedCount = 0;
   let failedCount = 0;
@@ -1234,14 +1260,39 @@ export function activate(context: vscode.ExtensionContext): void {
   extensionOutputChannel = output;
   const hostInfo = detectHostIdeInfo();
   const mediaRoot = vscode.Uri.joinPath(context.extensionUri, "media");
+  let harmonyWebviewView: vscode.WebviewView | undefined;
+  let hasOpenedHarmonyView = context.globalState.get<boolean>(HARMONY_VIEW_OPENED_STATE_KEY, false);
+  const openHarmonyViewStatusBarItem = hasOpenedHarmonyView
+    ? undefined
+    : createOpenHarmonyViewStatusBarItem();
+
   output.appendLine(
     `[host] detected ide=${hostInfo.host} scheme=${hostInfo.uriScheme || "unknown"} appName=${hostInfo.appName || "unknown"} officialVsCode=${hostInfo.isOfficialVsCode}`
+  );
+
+  const markHarmonyViewOpened = async (): Promise<void> => {
+    if (hasOpenedHarmonyView) {
+      return;
+    }
+
+    hasOpenedHarmonyView = true;
+    openHarmonyViewStatusBarItem?.hide();
+    await context.globalState.update(HARMONY_VIEW_OPENED_STATE_KEY, true);
+  };
+
+  const openHarmonyViewCommand = vscode.commands.registerCommand(
+    OPEN_HARMONY_HELPER_VIEW_COMMAND_ID,
+    async () => {
+      await openHarmonyHelperView(harmonyWebviewView);
+    }
   );
 
   const webviewProvider = vscode.window.registerWebviewViewProvider(
     HARMONY_VIEW_ID,
     {
       resolveWebviewView: async (webviewView) => {
+        harmonyWebviewView = webviewView;
+        await markHarmonyViewOpened();
         webviewView.webview.options = {
           enableScripts: true,
           localResourceRoots: [mediaRoot]
@@ -1250,7 +1301,12 @@ export function activate(context: vscode.ExtensionContext): void {
         const onDidReceiveMessage = webviewView.webview.onDidReceiveMessage((raw) => {
           void handleHostBridgeInvoke(raw, webviewView.webview, output, hostInfo, context);
         });
-        context.subscriptions.push(onDidReceiveMessage);
+        const onDidDispose = webviewView.onDidDispose(() => {
+          if (harmonyWebviewView === webviewView) {
+            harmonyWebviewView = undefined;
+          }
+        });
+        context.subscriptions.push(onDidReceiveMessage, onDidDispose);
 
         try {
           await ensureBridgeStarted(context, output);
@@ -1269,7 +1325,15 @@ export function activate(context: vscode.ExtensionContext): void {
     }
   );
 
-  context.subscriptions.push(webviewProvider, output, {
+  openHarmonyViewStatusBarItem?.show();
+
+  context.subscriptions.push(openHarmonyViewCommand, webviewProvider, output);
+
+  if (openHarmonyViewStatusBarItem) {
+    context.subscriptions.push(openHarmonyViewStatusBarItem);
+  }
+
+  context.subscriptions.push({
     dispose: () => {
       cleanupTrackedHarmonyTempFiles(output);
       stopBridgeProcess(output);
