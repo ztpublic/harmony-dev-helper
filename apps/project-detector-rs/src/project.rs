@@ -1,14 +1,16 @@
+use crate::build_profile::{load_project_build_profile, ProjectBuildProfile};
 use crate::error::{DetectorError, Result};
 use crate::project_detector::ProjectDetector;
-use crate::utils::path::{path_is_dir, read_to_string};
+use crate::utils::path::path_is_dir;
 use crate::utils::uri::Uri;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 use walkdir::WalkDir;
 
 pub struct Project {
     project_detector: Arc<ProjectDetector>,
     uri: Uri,
+    build_profile: ProjectBuildProfile,
     parsed_build_profile: serde_json::Value,
     build_profile_uri: Uri,
     build_profile_content: String,
@@ -73,55 +75,32 @@ impl Project {
         }
 
         let uri = Uri::file(&project_path)?;
-        let build_profile_path = project_path.join("build-profile.json5");
-        let build_profile_uri = Uri::file(&build_profile_path)?;
-        let build_profile_content = read_to_string(&build_profile_path)?;
-        let parsed_build_profile: serde_json::Value = serde_json5::from_str(&build_profile_content)
-            .map_err(|source| DetectorError::json5(build_profile_path.clone(), source))?;
+        let Some(loaded_profile) = load_project_build_profile(&project_path)? else {
+            return Ok(None);
+        };
 
-        if parsed_build_profile.is_object()
-            && parsed_build_profile.get("app").is_some_and(|app| {
-                app.is_object()
-                    && parsed_build_profile
-                        .get("modules")
-                        .and_then(|modules| modules.as_array())
-                        .is_some()
-            })
-        {
-            Ok(Some(Arc::new(Project {
-                project_detector: Arc::clone(project_detector),
-                uri,
-                parsed_build_profile,
-                build_profile_uri,
-                build_profile_content,
-            })))
-        } else {
-            Ok(None)
-        }
+        Ok(Some(Arc::new(Project {
+            project_detector: Arc::clone(project_detector),
+            uri,
+            build_profile: loaded_profile.profile,
+            parsed_build_profile: loaded_profile.raw,
+            build_profile_uri: loaded_profile.uri,
+            build_profile_content: loaded_profile.content,
+        })))
     }
 
     pub fn reload(&mut self) -> Result<()> {
-        let project_uri = self.get_uri();
-        let build_profile_path = Path::new(&project_uri.fs_path()).join("build-profile.json5");
-        let build_profile_content = read_to_string(&build_profile_path)?;
-        let parsed_build_profile: serde_json::Value = serde_json5::from_str(&build_profile_content)
-            .map_err(|source| DetectorError::json5(build_profile_path.clone(), source))?;
-        if !parsed_build_profile.is_object()
-            || !parsed_build_profile.get("app").is_some_and(|app| {
-                app.is_object()
-                    && parsed_build_profile
-                        .get("modules")
-                        .and_then(|modules| modules.as_array())
-                        .is_some()
-            })
-        {
-            return Err(DetectorError::InvalidProjectBuildProfile {
-                path: build_profile_path,
-            });
-        }
+        let project_path = PathBuf::from(self.uri.fs_path());
+        let loaded_profile = load_project_build_profile(&project_path)?.ok_or_else(|| {
+            DetectorError::InvalidProjectBuildProfile {
+                path: project_path.join("build-profile.json5"),
+            }
+        })?;
 
-        self.update_parsed_build_profile(parsed_build_profile);
-        self.update_build_profile_content(build_profile_content);
+        self.build_profile = loaded_profile.profile;
+        self.parsed_build_profile = loaded_profile.raw;
+        self.build_profile_uri = loaded_profile.uri;
+        self.build_profile_content = loaded_profile.content;
         Ok(())
     }
 
@@ -129,12 +108,12 @@ impl Project {
         self.uri.clone()
     }
 
-    pub fn get_parsed_build_profile(&self) -> serde_json::Value {
-        self.parsed_build_profile.clone()
+    pub(crate) fn build_profile(&self) -> &ProjectBuildProfile {
+        &self.build_profile
     }
 
-    pub fn update_parsed_build_profile(&mut self, parsed_build_profile: serde_json::Value) {
-        self.parsed_build_profile = parsed_build_profile;
+    pub fn get_parsed_build_profile(&self) -> serde_json::Value {
+        self.parsed_build_profile.clone()
     }
 
     pub fn get_build_profile_uri(&self) -> Uri {
@@ -143,9 +122,5 @@ impl Project {
 
     pub fn get_build_profile_content(&self) -> String {
         self.build_profile_content.clone()
-    }
-
-    pub fn update_build_profile_content(&mut self, build_profile_content: String) {
-        self.build_profile_content = build_profile_content;
     }
 }

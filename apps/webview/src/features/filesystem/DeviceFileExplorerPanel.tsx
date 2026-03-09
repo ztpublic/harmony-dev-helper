@@ -195,7 +195,9 @@ export function DeviceFileExplorerPanel({
 
   if (!hdcAvailable) {
     return (
-      <ExplorerPlaceholder message="HDC is unavailable. Configure the HDC binary in Settings." />
+      <section className="file-system-device-panel" aria-label="Device file explorer">
+        <p className="panel-message">HDC is unavailable. Configure the HDC binary in Settings.</p>
+      </section>
     );
   }
 

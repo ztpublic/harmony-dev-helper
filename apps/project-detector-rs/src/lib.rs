@@ -1,3 +1,5 @@
+mod build_profile;
+
 pub mod element_directory;
 pub mod error;
 pub mod files;

@@ -21,25 +21,26 @@ impl ResourceDirectory {
         let dirs = fs::read_dir(resource_directory.fs_path())
             .map_err(|source| DetectorError::io(resource_directory.fs_path(), source))?;
 
-        for dir in dirs.flatten() {
-            if dir
+        for dir in dirs {
+            let dir =
+                dir.map_err(|source| DetectorError::io(resource_directory.fs_path(), source))?;
+            let path = dir.path();
+            let metadata = dir
                 .metadata()
-                .map(|metadata| metadata.is_dir())
-                .unwrap_or(false)
-            {
-                let dir_name = dir.file_name().to_string_lossy().to_string();
-                if dir_name != "base"
-                    && dir_name != "rawfile"
-                    && dir_name != "resfile"
-                    && QualifierUtils::analyze_qualifier(dir_name).is_empty()
-                {
-                    continue;
-                }
-                resource_directories.push(Arc::new(ResourceDirectory {
-                    uri: Uri::file(dir.path())?,
-                    resource: Arc::clone(resource),
-                }))
+                .map_err(|source| DetectorError::io(path.clone(), source))?;
+            if !metadata.is_dir() {
+                continue;
             }
+
+            let dir_name = dir.file_name().to_string_lossy().to_string();
+            if !is_resource_directory_name(&dir_name) {
+                continue;
+            }
+
+            resource_directories.push(Arc::new(ResourceDirectory {
+                uri: Uri::file(&path)?,
+                resource: Arc::clone(resource),
+            }))
         }
 
         Ok(resource_directories)
@@ -58,11 +59,7 @@ impl ResourceDirectory {
 
         let uri = Uri::file(&resource_directory_path)?;
         let dir_name = Uri::base_name(&uri);
-        if dir_name != "base"
-            && dir_name != "rawfile"
-            && dir_name != "resfile"
-            && QualifierUtils::analyze_qualifier(dir_name).is_empty()
-        {
+        if !is_resource_directory_name(&dir_name) {
             return Ok(None);
         }
         Ok(Some(Arc::new(ResourceDirectory {
@@ -96,4 +93,11 @@ impl ResourceDirectory {
             )
         }
     }
+}
+
+fn is_resource_directory_name(dir_name: &str) -> bool {
+    dir_name == "base"
+        || dir_name == "rawfile"
+        || dir_name == "resfile"
+        || !QualifierUtils::analyze_qualifier(dir_name.to_string()).is_empty()
 }

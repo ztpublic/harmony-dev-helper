@@ -11,7 +11,7 @@ use project_detector_rs::references::element_json_file_reference::ElementJsonFil
 use project_detector_rs::resource::Resource;
 use project_detector_rs::resource_directory::ResourceDirectory;
 use project_detector_rs::utils::uri::Uri;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tempfile::tempdir;
 
@@ -22,6 +22,36 @@ fn mock_root() -> String {
         .unwrap()
         .to_string_lossy()
         .to_string()
+}
+
+fn write_project_fixture(
+    project_root: &Path,
+    project_build_profile: &str,
+    module_build_profile: &str,
+) {
+    let module_root = project_root.join("entry");
+    std::fs::create_dir_all(&module_root).unwrap();
+    std::fs::write(
+        project_root.join("build-profile.json5"),
+        project_build_profile,
+    )
+    .unwrap();
+    std::fs::write(
+        module_root.join("build-profile.json5"),
+        module_build_profile,
+    )
+    .unwrap();
+}
+
+fn load_project(project_root: &Path) -> Result<Arc<Project>> {
+    let detector = Arc::new(ProjectDetector::create(
+        project_root.to_string_lossy().to_string(),
+    )?);
+    Project::create(&detector, project_root.to_string_lossy().to_string())?.ok_or_else(|| {
+        DetectorError::InvalidProjectBuildProfile {
+            path: project_root.join("build-profile.json5"),
+        }
+    })
 }
 
 #[test]
@@ -228,5 +258,121 @@ fn invalid_element_json_returns_a_parse_error() -> Result<()> {
         ElementJsonFile::from_source("string.json".to_string(), "{ invalid json5".to_string())?;
     let error = element_json.parse().unwrap_err();
     assert!(matches!(error, DetectorError::Json5 { .. }));
+    Ok(())
+}
+
+#[test]
+fn module_find_all_rejects_blank_source_roots() -> Result<()> {
+    let temp_dir = tempdir().unwrap();
+    let project_root = temp_dir.path().join("workspace");
+    write_project_fixture(
+        &project_root,
+        r#"
+        {
+          "app": {},
+          "modules": [
+            { "name": "entry", "srcPath": "entry" }
+          ]
+        }
+        "#,
+        r#"
+        {
+          "targets": [
+            {
+              "name": "default",
+              "source": {
+                "sourceRoots": [""]
+              }
+            }
+          ]
+        }
+        "#,
+    );
+
+    let project = load_project(&project_root)?;
+    let error = match Module::find_all(&project) {
+        Ok(_) => panic!("expected blank source root to be rejected"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        DetectorError::InvalidModuleBuildProfile { .. }
+    ));
+    Ok(())
+}
+
+#[test]
+fn module_find_all_rejects_blank_resource_directories() -> Result<()> {
+    let temp_dir = tempdir().unwrap();
+    let project_root = temp_dir.path().join("workspace");
+    write_project_fixture(
+        &project_root,
+        r#"
+        {
+          "app": {},
+          "modules": [
+            { "name": "entry", "srcPath": "entry" }
+          ]
+        }
+        "#,
+        r#"
+        {
+          "targets": [
+            {
+              "name": "default",
+              "resource": {
+                "directories": [""]
+              }
+            }
+          ]
+        }
+        "#,
+    );
+
+    let project = load_project(&project_root)?;
+    let error = match Module::find_all(&project) {
+        Ok(_) => panic!("expected blank resource directory to be rejected"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        DetectorError::InvalidModuleBuildProfile { .. }
+    ));
+    Ok(())
+}
+
+#[test]
+fn project_create_rejects_blank_module_src_path() -> Result<()> {
+    let temp_dir = tempdir().unwrap();
+    let project_root = temp_dir.path().join("workspace");
+    write_project_fixture(
+        &project_root,
+        r#"
+        {
+          "app": {},
+          "modules": [
+            { "name": "entry", "srcPath": "" }
+          ]
+        }
+        "#,
+        r#"
+        {
+          "targets": [
+            {
+              "name": "default"
+            }
+          ]
+        }
+        "#,
+    );
+
+    let error = match load_project(&project_root) {
+        Ok(_) => panic!("expected blank module srcPath to be rejected"),
+        Err(error) => error,
+    };
+    assert!(matches!(
+        error,
+        DetectorError::InvalidProjectBuildProfile { .. }
+    ));
     Ok(())
 }
