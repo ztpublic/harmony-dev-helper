@@ -39,24 +39,22 @@ Additional helper types hang off resource directories:
 - `ElementJsonFile`
 - `ElementJsonFileReference`
 
-Objects keep parent links with `Arc`, so traversal is cheap to compose from higher-level callers.
+Objects are plain values and are traversed by borrowing rather than keeping parent-link `Arc` chains.
 
 ## Public API
 
 The main entry points are:
 
 ```rust
-use std::sync::Arc;
-
 use project_detector_rs::project::Project;
 use project_detector_rs::project_detector::ProjectDetector;
 
 fn load_projects(workspace: String) -> project_detector_rs::error::Result<()> {
-    let detector = Arc::new(ProjectDetector::create(workspace)?);
+    let detector = ProjectDetector::new(workspace)?;
     let projects = Project::find_all(&detector)?;
 
     for project in projects {
-        println!("{}", project.get_uri());
+        println!("{}", project.uri());
     }
 
     Ok(())
@@ -66,8 +64,6 @@ fn load_projects(workspace: String) -> project_detector_rs::error::Result<()> {
 Typical traversal looks like this:
 
 ```rust
-use std::sync::Arc;
-
 use project_detector_rs::element_directory::ElementDirectory;
 use project_detector_rs::files::element_json_file::ElementJsonFile;
 use project_detector_rs::module::Module;
@@ -79,19 +75,19 @@ use project_detector_rs::resource::Resource;
 use project_detector_rs::resource_directory::ResourceDirectory;
 
 fn scan(workspace: String) -> project_detector_rs::error::Result<()> {
-    let detector = Arc::new(ProjectDetector::create(workspace)?);
+    let detector = ProjectDetector::new(workspace)?;
 
     for project in Project::find_all(&detector)? {
         for module in Module::find_all(&project)? {
             for product in Product::find_all(&module) {
                 for resource in Resource::find_all(&product)? {
                     for resource_dir in ResourceDirectory::find_all(&resource)? {
-                        if let Some(element_dir) = ElementDirectory::from(&resource_dir)? {
+                        if let Some(element_dir) = ElementDirectory::locate(&resource_dir)? {
                             for file in ElementJsonFile::find_all(&element_dir)? {
                                 let references = ElementJsonFileReference::find_all(&file)?;
                                 println!(
                                     "{} -> {} references",
-                                    file.get_uri(),
+                                    file.uri(),
                                     references.len()
                                 );
                             }
@@ -143,11 +139,11 @@ Notable behavior:
 
 From there, callers can opt into narrower views:
 
-- `ElementDirectory::from(...)` for `element/`
-- `MediaDirectory::from(...)` for `media/`
-- `ProfileDirectory::from(...)` for `profile/`
-- `RawfileDirectory::from(...)` for `rawfile/`
-- `ResfileDirectory::from(...)` for `resfile/`
+- `ElementDirectory::locate(...)` for `element/`
+- `MediaDirectory::locate(...)` for `media/`
+- `ProfileDirectory::locate(...)` for `profile/`
+- `RawfileDirectory::locate(...)` for `rawfile/`
+- `ResfileDirectory::locate(...)` for `resfile/`
 
 `ElementJsonFileReference::find_all(...)` returns extracted references with:
 
@@ -159,16 +155,14 @@ From there, callers can opt into narrower views:
 
 ## Implementation Notes
 
-- Build profile data is still handled as `serde_json::Value`, not typed Rust structs.
-- Most getters return owned values for simplicity.
-- This crate is intentionally close to the upstream layout, so some APIs are more direct than idiomatic.
-- The parser logic for `element/*.json` is functional but still fairly low-level and Tree-sitter-driven.
+- Project and module build profiles are parsed once into typed internal config structs before domain objects are built.
+- Entity accessors now prefer borrowed data (`uri()`, `name()`, `build_profile_content()`) instead of cloning by default.
+- The parser logic for `element/*.json` is still low-level and Tree-sitter-driven.
 
 ## Known Rough Edges
 
 - The API surface is broader than the currently tested integration path.
-- Some convenience getters are clone-heavy.
-- Module and target configuration are still stringly typed.
+- The `element/*.json` parsing path is still more complex than the rest of the crate.
 - This crate should be treated as an internal dependency under active cleanup, not a polished public library yet.
 
 ## Development

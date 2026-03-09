@@ -57,6 +57,11 @@ impl Uri {
             .unwrap_or_default()
             .to_string()
     }
+
+    pub fn as_path(&self) -> &path::Path {
+        &self.fs_path
+    }
+
     pub fn dir_name(uri: &Uri) -> Result<Uri> {
         let path = path::Path::new(&uri.fs_path);
         let parent = path
@@ -103,9 +108,10 @@ impl Uri {
         self.url.port().unwrap_or_default()
     }
 
-    pub fn get_url(&self) -> Url {
-        self.url.clone()
+    pub fn url(&self) -> &Url {
+        &self.url
     }
+
     #[allow(clippy::inherent_to_string_shadow_display)]
     pub fn to_string(&self) -> String {
         self.url.to_string()

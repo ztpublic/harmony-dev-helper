@@ -1,7 +1,6 @@
 use crate::error::{DetectorError, Result};
 use crate::files::element_json_file::ElementJsonFile;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 pub struct ElementJsonFileReference {
     element_type: String,
@@ -11,7 +10,6 @@ pub struct ElementJsonFileReference {
     value_start: u32,
     value_end: u32,
     value_text: String,
-    element_json_file: Arc<ElementJsonFile>,
 }
 
 impl ElementJsonFileReference {
@@ -23,7 +21,6 @@ impl ElementJsonFileReference {
         value_start: u32,
         value_end: u32,
         value_text: String,
-        element_json_file: Arc<ElementJsonFile>,
         element_type: String,
     ) -> Self {
         Self {
@@ -33,7 +30,6 @@ impl ElementJsonFileReference {
             value_start,
             value_end,
             value_text,
-            element_json_file,
             element_type,
         }
     }
@@ -43,7 +39,7 @@ impl ElementJsonFileReference {
     }
 
     fn path(element_json_file: &ElementJsonFile) -> PathBuf {
-        PathBuf::from(element_json_file.get_uri().fs_path())
+        element_json_file.uri().as_path().to_path_buf()
     }
 
     fn node_text(node: tree_sitter::Node<'_>, source_code: &str, path: &Path) -> Result<String> {
@@ -55,17 +51,15 @@ impl ElementJsonFileReference {
             })
     }
 
-    pub fn find_all(
-        element_json_file: &Arc<ElementJsonFile>,
-    ) -> Result<Vec<ElementJsonFileReference>> {
+    pub fn find_all(element_json_file: &ElementJsonFile) -> Result<Vec<ElementJsonFileReference>> {
         let mut reference = Vec::new();
-        let parser = element_json_file.get_parser();
-        let source_code = element_json_file.get_content();
+        let parser = element_json_file.parser();
+        let source_code = element_json_file.content();
         let path = Self::path(element_json_file);
         let tree = parser
             .lock()
             .map_err(|_| DetectorError::ParserPoisoned { path: path.clone() })?
-            .parse(&source_code, None)
+            .parse(source_code, None)
             .ok_or_else(|| DetectorError::TreeSitterParse { path: path.clone() })?;
 
         for child in tree.root_node().children(&mut tree.root_node().walk()) {
@@ -82,7 +76,7 @@ impl ElementJsonFileReference {
                 for element_type_value in element_type_key.children(&mut element_type_key.walk()) {
                     if element_type_value.kind() == "string" {
                         current_element_type =
-                            Self::node_text(element_type_value, &source_code, &path)?;
+                            Self::node_text(element_type_value, source_code, &path)?;
                         continue;
                     }
                     if element_type_value.kind() != "array" {
@@ -119,29 +113,29 @@ impl ElementJsonFileReference {
                             if filtered_nodes.len() != 2 {
                                 continue;
                             }
-                            let key_text = Self::node_text(filtered_nodes[0], &source_code, &path)?;
+                            let key_text = Self::node_text(filtered_nodes[0], source_code, &path)?;
                             if key_text == "\"name\"" {
                                 name_start = Some(Self::byte_to_char_index(
-                                    &source_code,
+                                    source_code,
                                     filtered_nodes[1].start_byte(),
                                 ));
                                 name_end = Some(Self::byte_to_char_index(
-                                    &source_code,
+                                    source_code,
                                     filtered_nodes[1].end_byte(),
                                 ));
                                 name_text =
-                                    Some(Self::node_text(filtered_nodes[1], &source_code, &path)?);
+                                    Some(Self::node_text(filtered_nodes[1], source_code, &path)?);
                             } else if key_text == "\"value\"" {
                                 value_start = Some(Self::byte_to_char_index(
-                                    &source_code,
+                                    source_code,
                                     filtered_nodes[1].start_byte(),
                                 ));
                                 value_end = Some(Self::byte_to_char_index(
-                                    &source_code,
+                                    source_code,
                                     filtered_nodes[1].end_byte(),
                                 ));
                                 value_text =
-                                    Some(Self::node_text(filtered_nodes[1], &source_code, &path)?);
+                                    Some(Self::node_text(filtered_nodes[1], source_code, &path)?);
                             } else {
                                 continue;
                             }
@@ -169,7 +163,6 @@ impl ElementJsonFileReference {
                                 value_start as u32,
                                 value_end as u32,
                                 value_text,
-                                Arc::clone(element_json_file),
                                 current_element_type.clone(),
                             ))
                         }
@@ -181,90 +174,56 @@ impl ElementJsonFileReference {
         Ok(reference)
     }
 
-    pub fn get_element_json_file(&self) -> Arc<ElementJsonFile> {
-        Arc::clone(&self.element_json_file)
-    }
-
-    pub fn get_name_start(&self) -> u32 {
+    pub fn name_start(&self) -> u32 {
         self.name_start
     }
 
-    pub fn get_name_end(&self) -> u32 {
+    pub fn name_end(&self) -> u32 {
         self.name_end
     }
 
-    pub fn get_value_start(&self) -> u32 {
+    pub fn value_start(&self) -> u32 {
         self.value_start
     }
 
-    pub fn get_value_end(&self) -> u32 {
+    pub fn value_end(&self) -> u32 {
         self.value_end
     }
 
-    pub fn get_name_text(&self) -> String {
-        let s = self.name_text.as_str();
-        let s = if let Some(stripped) = s.strip_prefix('"') {
-            stripped
-        } else {
-            s
-        };
-        let s = if let Some(stripped) = s.strip_suffix('"') {
-            stripped
-        } else {
-            s
-        };
-        s.to_string()
+    pub fn name_text(&self) -> &str {
+        unquote(&self.name_text)
     }
 
-    pub fn get_name_full_text(&self) -> String {
-        self.name_text.clone()
+    pub fn name_full_text(&self) -> &str {
+        &self.name_text
     }
 
-    pub fn get_value_text(&self) -> String {
-        let s = self.value_text.as_str();
-        let s = if let Some(stripped) = s.strip_prefix('"') {
-            stripped
-        } else {
-            s
-        };
-        let s = if let Some(stripped) = s.strip_suffix('"') {
-            stripped
-        } else {
-            s
-        };
-        s.to_string()
+    pub fn value_text(&self) -> &str {
+        unquote(&self.value_text)
     }
 
-    pub fn get_value_full_text(&self) -> String {
-        self.value_text.clone()
+    pub fn value_full_text(&self) -> &str {
+        &self.value_text
     }
 
-    pub fn get_element_type(&self) -> String {
-        let s = self.element_type.as_str();
-        let s = if let Some(stripped) = s.strip_prefix('"') {
-            stripped
-        } else {
-            s
-        };
-        let s = if let Some(stripped) = s.strip_suffix('"') {
-            stripped
-        } else {
-            s
-        };
-        s.to_string()
+    pub fn element_type(&self) -> &str {
+        unquote(&self.element_type)
     }
 
-    pub fn get_full_element_type(&self) -> String {
-        self.element_type.clone()
+    pub fn full_element_type(&self) -> &str {
+        &self.element_type
     }
 
     pub fn to_ets_format(&self) -> String {
-        let text = self.get_name_text();
-        format!("app.{}.{}", self.get_element_type(), text)
+        format!("app.{}.{}", self.element_type(), self.name_text())
     }
 
     pub fn to_json_format(&self) -> String {
-        let text = self.get_name_text();
-        format!("${}:{}", self.get_element_type(), text)
+        format!("${}:{}", self.element_type(), self.name_text())
     }
+}
+
+fn unquote(text: &str) -> &str {
+    let stripped = text.strip_prefix('"').unwrap_or(text);
+    stripped.strip_suffix('"').unwrap_or(stripped)
 }

@@ -1,18 +1,12 @@
 use std::path::{Path, PathBuf};
 
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 
 use crate::error::{DetectorError, Result};
 use crate::utils::path::read_to_string;
 use crate::utils::uri::Uri;
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-pub(crate) struct AppConfig {
-    #[serde(flatten)]
-    extra: serde_json::Map<String, serde_json::Value>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ProjectModuleConfig {
     name: String,
     #[serde(rename = "srcPath")]
@@ -29,9 +23,8 @@ impl ProjectModuleConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ProjectBuildProfile {
-    app: AppConfig,
     modules: Vec<ProjectModuleConfig>,
 }
 
@@ -41,7 +34,7 @@ impl ProjectBuildProfile {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct SourceConfig {
     #[serde(default, rename = "sourceRoots")]
     source_roots: Vec<String>,
@@ -53,7 +46,7 @@ impl SourceConfig {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub(crate) struct ResourceConfig {
     #[serde(default)]
     directories: Vec<String>,
@@ -65,7 +58,7 @@ impl ResourceConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct TargetConfig {
     name: String,
     #[serde(default)]
@@ -88,7 +81,7 @@ impl TargetConfig {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ModuleBuildProfile {
     targets: Vec<TargetConfig>,
 }
@@ -147,10 +140,6 @@ pub(crate) fn load_module_build_profile(
         raw,
         profile,
     })
-}
-
-pub(crate) fn to_json_value<T: Serialize>(value: &T) -> serde_json::Value {
-    serde_json::to_value(value).expect("serializing build profile data should not fail")
 }
 
 fn build_profile_path(root: &Path) -> PathBuf {

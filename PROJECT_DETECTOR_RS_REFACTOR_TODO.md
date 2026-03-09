@@ -110,20 +110,30 @@ Verification:
 - `cargo test --manifest-path apps/project-detector-rs/Cargo.toml`
 - `cargo clippy --manifest-path apps/project-detector-rs/Cargo.toml --all-targets -- -D warnings`
 
-### P1: Make the public and internal APIs idiomatic
+### [x] P1: Make the public and internal APIs idiomatic
 
-- Rename internal constructor/accessor/update methods to idiomatic Rust names.
-- Remove clone-heavy getters that return owned `String`, `Uri`, and `serde_json::Value` by default.
-- Replace parent-link `Arc<T>` usage where shared ownership is not required by real call patterns.
-- Collapse trivial wrapper types if they do not carry meaningful behavior beyond `uri + parent`.
-- Revisit `ProjectDetector -> Project -> Module -> Product -> Resource -> ResourceDirectory` and decide which layers should be real public domain objects versus internal traversal helpers.
+Completed:
 
-### P1: Replace stringly config access with typed structures
+- Renamed the main constructor/accessor surface to idiomatic Rust names such as `new`, `load`, `locate`, `uri`, `name`, `workspace_folder`, `content`, and `qualifiers`.
+- Switched the crate from clone-heavy `get_*` accessors to borrowed accessors by default, especially for `Uri`, `String`, and build-profile content.
+- Removed the parent-link `Arc<T>` object graph across `Project`, `Module`, `Product`, `Resource`, `ResourceDirectory`, and the directory wrapper types; traversal now uses plain values and borrows.
+- Collapsed several trivial wrappers down to `uri`-centric value objects instead of `uri + parent Arc` holders.
+- Updated tests and README examples to use the new plain-value traversal API rather than `Arc` chaining.
 
-- Introduce typed structs for project build-profile, module declarations, target declarations, source roots, and resource directories.
-- Parse JSON5 once into typed config data, then derive domain objects from that typed layer.
-- Remove repeated `serde_json::Value` lookups in `Product`.
-- Make invalid config errors precise and local to the typed parser layer.
+### [x] P1: Replace stringly config access with typed structures
+
+Completed:
+
+- Introduced typed project/module/target/source/resource build-profile structs in `src/build_profile.rs`.
+- Kept JSON5 parsing centralized and one-shot, then built `Project`, `Module`, and `Product` from that typed layer.
+- Removed repeated ad hoc `serde_json::Value` target lookups in `Product`.
+- Tightened invalid-config handling so malformed names and path lists fail at the build-profile layer instead of leaking through string defaults.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/project-detector-rs/Cargo.toml`
+- `cargo test --manifest-path apps/project-detector-rs/Cargo.toml`
+- `cargo clippy --manifest-path apps/project-detector-rs/Cargo.toml --all-targets -- -D warnings`
 
 ### P2: Simplify parser and resource discovery code
 

@@ -7,13 +7,13 @@ pub struct ProjectDetector {
 }
 
 impl ProjectDetector {
-    pub fn create(workspace_folder: String) -> Result<Self> {
+    pub fn new(workspace_folder: impl AsRef<str>) -> Result<Self> {
         Ok(Self {
-            workspace_folder: Uri::from_path_or_uri(workspace_folder)?,
+            workspace_folder: Uri::from_path_or_uri(workspace_folder.as_ref())?,
         })
     }
 
-    pub fn get_workspace_folder(&self) -> Uri {
-        self.workspace_folder.clone()
+    pub fn workspace_folder(&self) -> &Uri {
+        &self.workspace_folder
     }
 }

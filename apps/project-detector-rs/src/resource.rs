@@ -2,26 +2,24 @@ use crate::error::{DetectorError, Result};
 use crate::product::Product;
 use crate::utils::path::path_is_dir;
 use crate::utils::uri::Uri;
-use std::path::PathBuf;
-use std::sync::Arc;
+use std::path::Path;
 
 pub struct Resource {
-    product: Arc<Product>,
     uri: Uri,
 }
 
 impl Resource {
-    pub fn find_all(product: &Arc<Product>) -> Result<Vec<Arc<Resource>>> {
+    pub fn find_all(product: &Product) -> Result<Vec<Resource>> {
         let mut resources = Vec::new();
-        for resource_uri in product.get_resource_directories()? {
-            resources.push(Self::create(product, resource_uri.fs_path())?);
+        for resource_uri in product.resource_directories()? {
+            resources.push(Self::load(resource_uri.as_path())?);
         }
 
         Ok(resources)
     }
 
-    pub fn create(product: &Arc<Product>, resource_uri: String) -> Result<Arc<Resource>> {
-        let resource_path = PathBuf::from(&resource_uri);
+    pub fn load(resource_path: impl AsRef<Path>) -> Result<Resource> {
+        let resource_path = resource_path.as_ref().to_path_buf();
         if !path_is_dir(&resource_path)? {
             return Err(DetectorError::ExpectedDirectory {
                 path: resource_path,
@@ -29,17 +27,10 @@ impl Resource {
         }
 
         let uri = Uri::file(&resource_path)?;
-        Ok(Arc::new(Resource {
-            product: Arc::clone(product),
-            uri,
-        }))
+        Ok(Resource { uri })
     }
 
-    pub fn get_product(&self) -> Arc<Product> {
-        Arc::clone(&self.product)
-    }
-
-    pub fn get_uri(&self) -> Uri {
-        self.uri.clone()
+    pub fn uri(&self) -> &Uri {
+        &self.uri
     }
 }
