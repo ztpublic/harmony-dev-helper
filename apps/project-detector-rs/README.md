@@ -48,13 +48,14 @@ The main entry points are:
 ```rust
 use project_detector_rs::project::Project;
 use project_detector_rs::project_detector::ProjectDetector;
+use std::path::Path;
 
-fn load_projects(workspace: String) -> project_detector_rs::error::Result<()> {
+fn load_projects(workspace: &Path) -> project_detector_rs::error::Result<()> {
     let detector = ProjectDetector::new(workspace)?;
     let projects = Project::find_all(&detector)?;
 
     for project in projects {
-        println!("{}", project.uri());
+        println!("{}", project.path().display());
     }
 
     Ok(())
@@ -73,8 +74,9 @@ use project_detector_rs::project_detector::ProjectDetector;
 use project_detector_rs::references::element_json_file_reference::ElementJsonFileReference;
 use project_detector_rs::resource::Resource;
 use project_detector_rs::resource_directory::ResourceDirectory;
+use std::path::Path;
 
-fn scan(workspace: String) -> project_detector_rs::error::Result<()> {
+fn scan(workspace: &Path) -> project_detector_rs::error::Result<()> {
     let detector = ProjectDetector::new(workspace)?;
 
     for project in Project::find_all(&detector)? {
@@ -87,7 +89,7 @@ fn scan(workspace: String) -> project_detector_rs::error::Result<()> {
                                 let references = ElementJsonFileReference::find_all(&file)?;
                                 println!(
                                     "{} -> {} references",
-                                    file.uri(),
+                                    file.path().display(),
                                     references.len()
                                 );
                             }
@@ -119,7 +121,7 @@ The detector now treats malformed paths and parse failures as real errors instea
 
 ## Filesystem Rules
 
-The detector expects real files on disk and currently works with local filesystem paths or `file://` URIs.
+The detector expects real files on disk and primarily uses native filesystem paths internally. `file://` URIs are accepted only at explicit URI boundaries such as `ProjectDetector::from_uri(...)`.
 
 Notable behavior:
 
@@ -156,13 +158,12 @@ From there, callers can opt into narrower views:
 ## Implementation Notes
 
 - Project and module build profiles are parsed once into typed internal config structs before domain objects are built.
-- Entity accessors now prefer borrowed data (`uri()`, `name()`, `build_profile_content()`) instead of cloning by default.
-- The parser logic for `element/*.json` is still low-level and Tree-sitter-driven.
+- Filesystem-native types now store normalized `PathBuf`s and expose borrowed `path()` accessors; `Uri` values are derived only when callers explicitly need them.
+- The parser logic for `element/*.json` is low-level but now isolated from the rest of the path-handling code.
 
 ## Known Rough Edges
 
 - The API surface is broader than the currently tested integration path.
-- The `element/*.json` parsing path is still more complex than the rest of the crate.
 - This crate should be treated as an internal dependency under active cleanup, not a polished public library yet.
 
 ## Development

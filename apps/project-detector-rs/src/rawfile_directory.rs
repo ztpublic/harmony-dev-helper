@@ -1,21 +1,26 @@
 use crate::error::Result;
 use crate::fs_discovery::{find_recursive_files, locate_subdirectory};
 use crate::{resource::Resource, utils::uri::Uri};
+use std::path::{Path, PathBuf};
 
 pub struct RawfileDirectory {
-    uri: Uri,
+    path: PathBuf,
 }
 
 impl RawfileDirectory {
     pub fn locate(resource: &Resource) -> Result<Option<RawfileDirectory>> {
-        Ok(locate_subdirectory(resource.uri().as_path(), "rawfile")?.map(|uri| Self { uri }))
+        Ok(locate_subdirectory(resource.path(), "rawfile")?.map(|path| Self { path }))
     }
 
-    pub fn uri(&self) -> &Uri {
-        &self.uri
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
-    pub fn find_all(&self) -> Result<Vec<Uri>> {
-        find_recursive_files(self.uri().as_path())
+    pub fn uri(&self) -> Uri {
+        Uri::from_absolute_path(self.path.clone())
+    }
+
+    pub fn find_all(&self) -> Result<Vec<PathBuf>> {
+        find_recursive_files(self.path())
     }
 }

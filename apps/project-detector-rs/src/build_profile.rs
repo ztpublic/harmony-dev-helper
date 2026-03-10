@@ -4,7 +4,6 @@ use serde::Deserialize;
 
 use crate::error::{DetectorError, Result};
 use crate::utils::path::read_to_string;
-use crate::utils::uri::Uri;
 
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ProjectModuleConfig {
@@ -94,7 +93,7 @@ impl ModuleBuildProfile {
 
 #[derive(Clone)]
 pub(crate) struct LoadedBuildProfile<T> {
-    pub(crate) uri: Uri,
+    pub(crate) path: PathBuf,
     pub(crate) content: String,
     pub(crate) raw: serde_json::Value,
     pub(crate) profile: T,
@@ -114,7 +113,7 @@ pub(crate) fn load_project_build_profile(
     validate_project_build_profile(&profile, &path)?;
 
     Ok(Some(LoadedBuildProfile {
-        uri: Uri::file(&path)?,
+        path,
         content,
         raw,
         profile,
@@ -135,7 +134,7 @@ pub(crate) fn load_module_build_profile(
     validate_module_build_profile(&profile, &path)?;
 
     Ok(LoadedBuildProfile {
-        uri: Uri::file(&path)?,
+        path,
         content,
         raw,
         profile,

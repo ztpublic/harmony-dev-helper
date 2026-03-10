@@ -1,22 +1,22 @@
 use crate::build_profile::{load_module_build_profile, ModuleBuildProfile, ProjectModuleConfig};
 use crate::error::Result;
 use crate::project::Project;
-use crate::utils::path::resolve_within;
+use crate::utils::path::{absolute_path, resolve_within};
 use crate::utils::uri::Uri;
 use std::path::{Path, PathBuf};
 
 pub struct Module {
     name: String,
-    uri: Uri,
+    path: PathBuf,
     build_profile: ModuleBuildProfile,
     parsed_build_profile: serde_json::Value,
-    build_profile_uri: Uri,
+    build_profile_path: PathBuf,
     build_profile_content: String,
 }
 
 impl Module {
     pub fn load(module_path: impl AsRef<Path>) -> Result<Module> {
-        let module_path = module_path.as_ref().to_path_buf();
+        let module_path = absolute_path(module_path.as_ref())?;
         let module_name = module_path
             .file_name()
             .and_then(|name| name.to_str())
@@ -40,18 +40,22 @@ impl Module {
     }
 
     pub fn reload(&mut self) -> Result<()> {
-        let module_path = self.uri.as_path().to_path_buf();
+        let module_path = self.path.clone();
         let loaded_profile = load_module_build_profile(&module_path)?;
 
         self.build_profile = loaded_profile.profile;
         self.parsed_build_profile = loaded_profile.raw;
-        self.build_profile_uri = loaded_profile.uri;
+        self.build_profile_path = loaded_profile.path;
         self.build_profile_content = loaded_profile.content;
         Ok(())
     }
 
-    pub fn uri(&self) -> &Uri {
-        &self.uri
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn uri(&self) -> Uri {
+        Uri::from_absolute_path(self.path.clone())
     }
 
     pub fn name(&self) -> &str {
@@ -66,8 +70,12 @@ impl Module {
         &self.parsed_build_profile
     }
 
-    pub fn build_profile_uri(&self) -> &Uri {
-        &self.build_profile_uri
+    pub fn build_profile_path(&self) -> &Path {
+        &self.build_profile_path
+    }
+
+    pub fn build_profile_uri(&self) -> Uri {
+        Uri::from_absolute_path(self.build_profile_path.clone())
     }
 
     pub fn build_profile_content(&self) -> &str {
@@ -77,15 +85,15 @@ impl Module {
 
 impl Module {
     fn load_named(module_path: &Path, module_name: String) -> Result<Module> {
-        let uri = Uri::file(module_path)?;
-        let loaded_profile = load_module_build_profile(module_path)?;
+        let module_path = absolute_path(module_path)?;
+        let loaded_profile = load_module_build_profile(&module_path)?;
 
         Ok(Module {
             name: module_name,
-            uri,
+            path: module_path,
             build_profile: loaded_profile.profile,
             parsed_build_profile: loaded_profile.raw,
-            build_profile_uri: loaded_profile.uri,
+            build_profile_path: loaded_profile.path,
             build_profile_content: loaded_profile.content,
         })
     }
@@ -94,6 +102,6 @@ impl Module {
         project: &Project,
         module_config: &ProjectModuleConfig,
     ) -> Result<PathBuf> {
-        resolve_within(project.uri().as_path(), Path::new(module_config.src_path()))
+        resolve_within(project.path(), Path::new(module_config.src_path()))
     }
 }

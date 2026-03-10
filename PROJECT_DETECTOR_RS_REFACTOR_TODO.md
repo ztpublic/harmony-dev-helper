@@ -151,12 +151,21 @@ Verification:
 - `cargo test --manifest-path apps/project-detector-rs/Cargo.toml`
 - `cargo clippy --manifest-path apps/project-detector-rs/Cargo.toml --all-targets -- -D warnings`
 
-### P2: Normalize path and URI handling
+### [x] P2: Normalize path and URI handling
 
-- Pick clearer boundaries between filesystem paths and `Uri`. Avoid converting back and forth through `String` unless the API truly requires it.
-- Change APIs that currently take `String` paths to take `&Path` / `PathBuf` or `&str` only when URI text is actually needed.
-- Review `src/utils/uri.rs` and remove low-signal helpers that are not used or encourage clone-heavy call sites.
-- Prefer `PathBuf` storage for filesystem-native types and derive `Uri` only when required externally.
+Completed:
+
+- Moved filesystem-native entity storage to normalized `PathBuf`s across `ProjectDetector`, `Project`, `Module`, `Product`, `Resource`, `ResourceDirectory`, the resource subdirectory wrappers, and `ElementJsonFile`.
+- Added borrowed `path()` / `workspace_path()` accessors and changed internal traversal to stay on `&Path` / `PathBuf` until a `Uri` is explicitly requested.
+- Changed the remaining filesystem-facing constructors and helpers to take `&Path` / `PathBuf` instead of string paths, while keeping explicit URI parsing only at boundary methods such as `ProjectDetector::from_uri(...)`.
+- Simplified `src/utils/uri.rs` by removing the unused string-returning helper surface that encouraged path/URI/string round-trips and keeping it focused on file-URI creation and parsing.
+- Updated README examples and tests to use path-first access, and added focused tests covering relative-path normalization and `file://` URI acceptance.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/project-detector-rs/Cargo.toml`
+- `cargo test --manifest-path apps/project-detector-rs/Cargo.toml`
+- `cargo clippy --manifest-path apps/project-detector-rs/Cargo.toml --all-targets -- -D warnings`
 
 ### P3: Tighten module layout and crate surface
 

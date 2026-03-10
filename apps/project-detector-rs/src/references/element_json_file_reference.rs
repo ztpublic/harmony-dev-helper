@@ -50,7 +50,7 @@ impl ElementJsonFileReference {
 
     pub fn find_all(element_json_file: &ElementJsonFile) -> Result<Vec<ElementJsonFileReference>> {
         let source_code = element_json_file.content();
-        let path = element_json_file.uri().as_path();
+        let path = element_json_file.path();
         let tree = element_json_file.parse_tree()?;
         let Some(root_object) = root_object(tree.root_node()) else {
             return Ok(Vec::new());

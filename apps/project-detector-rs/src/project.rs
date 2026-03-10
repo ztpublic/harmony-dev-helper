@@ -1,16 +1,16 @@
 use crate::build_profile::{load_project_build_profile, ProjectBuildProfile};
 use crate::error::{DetectorError, Result};
 use crate::project_detector::ProjectDetector;
-use crate::utils::path::path_is_dir;
+use crate::utils::path::{absolute_path, path_is_dir};
 use crate::utils::uri::Uri;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 pub struct Project {
-    uri: Uri,
+    path: PathBuf,
     build_profile: ProjectBuildProfile,
     parsed_build_profile: serde_json::Value,
-    build_profile_uri: Uri,
+    build_profile_path: PathBuf,
     build_profile_content: String,
 }
 
@@ -29,7 +29,7 @@ impl Project {
 
     pub fn find_all(project_detector: &ProjectDetector) -> Result<Vec<Project>> {
         let mut projects = Vec::new();
-        let workspace_folder = project_detector.workspace_folder().as_path();
+        let workspace_folder = project_detector.workspace_path();
 
         for entry in WalkDir::new(workspace_folder)
             .into_iter()
@@ -58,27 +58,26 @@ impl Project {
     }
 
     pub fn load(project_path: impl AsRef<Path>) -> Result<Option<Project>> {
-        let project_path = project_path.as_ref().to_path_buf();
+        let project_path = absolute_path(project_path.as_ref())?;
         if !path_is_dir(&project_path)? {
             return Ok(None);
         }
 
-        let uri = Uri::file(&project_path)?;
         let Some(loaded_profile) = load_project_build_profile(&project_path)? else {
             return Ok(None);
         };
 
         Ok(Some(Project {
-            uri,
+            path: project_path,
             build_profile: loaded_profile.profile,
             parsed_build_profile: loaded_profile.raw,
-            build_profile_uri: loaded_profile.uri,
+            build_profile_path: loaded_profile.path,
             build_profile_content: loaded_profile.content,
         }))
     }
 
     pub fn reload(&mut self) -> Result<()> {
-        let project_path = self.uri.as_path().to_path_buf();
+        let project_path = self.path.clone();
         let loaded_profile = load_project_build_profile(&project_path)?.ok_or_else(|| {
             DetectorError::InvalidProjectBuildProfile {
                 path: project_path.join("build-profile.json5"),
@@ -87,13 +86,17 @@ impl Project {
 
         self.build_profile = loaded_profile.profile;
         self.parsed_build_profile = loaded_profile.raw;
-        self.build_profile_uri = loaded_profile.uri;
+        self.build_profile_path = loaded_profile.path;
         self.build_profile_content = loaded_profile.content;
         Ok(())
     }
 
-    pub fn uri(&self) -> &Uri {
-        &self.uri
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn uri(&self) -> Uri {
+        Uri::from_absolute_path(self.path.clone())
     }
 
     pub(crate) fn build_profile(&self) -> &ProjectBuildProfile {
@@ -104,8 +107,12 @@ impl Project {
         &self.parsed_build_profile
     }
 
-    pub fn build_profile_uri(&self) -> &Uri {
-        &self.build_profile_uri
+    pub fn build_profile_path(&self) -> &Path {
+        &self.build_profile_path
+    }
+
+    pub fn build_profile_uri(&self) -> Uri {
+        Uri::from_absolute_path(self.build_profile_path.clone())
     }
 
     pub fn build_profile_content(&self) -> &str {

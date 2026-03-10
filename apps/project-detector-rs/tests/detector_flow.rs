@@ -51,17 +51,27 @@ fn load_project(project_root: &Path) -> Result<Project> {
 #[test]
 fn detector_flow_matches_upstream_mock_projects() -> Result<()> {
     let mock_root = mock_root();
-    let detector = ProjectDetector::new(Uri::file(&mock_root)?.to_string())?;
-    assert_eq!(detector.workspace_folder().fs_path(), mock_root);
+    let detector = ProjectDetector::new(&mock_root)?;
+    assert_eq!(detector.workspace_path(), Path::new(&mock_root));
 
     let projects = Project::find_all(&detector)?;
     let harmony_project_1 = projects
         .iter()
-        .find(|project| project.uri().to_string().contains("harmony-project-1"))
+        .find(|project| {
+            project
+                .path()
+                .to_string_lossy()
+                .contains("harmony-project-1")
+        })
         .unwrap();
     let harmony_project_2 = projects
         .iter()
-        .find(|project| project.uri().to_string().contains("harmony-project-2"))
+        .find(|project| {
+            project
+                .path()
+                .to_string_lossy()
+                .contains("harmony-project-2")
+        })
         .unwrap();
 
     let harmony_project_1_modules = Module::find_all(harmony_project_1)?;
@@ -72,12 +82,12 @@ fn detector_flow_matches_upstream_mock_projects() -> Result<()> {
     let harmony_project_1_module = &harmony_project_1_modules[0];
     let harmony_project_2_module = &harmony_project_2_modules[0];
     assert!(harmony_project_1_module
-        .uri()
-        .to_string()
+        .path()
+        .to_string_lossy()
         .contains("/entry"));
     assert!(harmony_project_2_module
-        .uri()
-        .to_string()
+        .path()
+        .to_string_lossy()
         .contains("/entry"));
 
     let harmony_project_1_products = Product::find_all(harmony_project_1_module);
@@ -116,11 +126,21 @@ fn detector_flow_matches_upstream_mock_projects() -> Result<()> {
         ResourceDirectory::find_all(harmony_project_1_main_resource)?;
     let harmony_project_1_main_base_resource = harmony_project_1_resource_directories
         .iter()
-        .find(|resource_directory| resource_directory.uri().to_string().contains("/base"))
+        .find(|resource_directory| {
+            resource_directory
+                .path()
+                .to_string_lossy()
+                .contains("/base")
+        })
         .unwrap();
     let harmony_project_1_dark_resource = harmony_project_1_resource_directories
         .iter()
-        .find(|resource_directory| resource_directory.uri().to_string().contains("/dark"))
+        .find(|resource_directory| {
+            resource_directory
+                .path()
+                .to_string_lossy()
+                .contains("/dark")
+        })
         .unwrap();
     assert_eq!(
         harmony_project_1_main_base_resource.qualifiers(),
@@ -133,7 +153,12 @@ fn detector_flow_matches_upstream_mock_projects() -> Result<()> {
     let element_json_files = ElementJsonFile::find_all(&element_directory)?;
     let string_json_file = element_json_files
         .iter()
-        .find(|element_json_file| element_json_file.uri().to_string().contains("string.json"))
+        .find(|element_json_file| {
+            element_json_file
+                .path()
+                .to_string_lossy()
+                .contains("string.json")
+        })
         .unwrap();
 
     let references = ElementJsonFileReference::find_all(string_json_file)?;
@@ -164,7 +189,7 @@ fn detector_flow_matches_upstream_mock_projects() -> Result<()> {
     let rawfiles = rawfile_directory.find_all()?;
     assert!(rawfiles
         .iter()
-        .any(|uri| uri.to_string().contains("foo.txt")));
+        .any(|path| path.to_string_lossy().contains("foo.txt")));
 
     let harmony_project_1_test_resources = Resource::find_all(harmony_project_1_test_product)?;
     let harmony_project_1_test_resource = &harmony_project_1_test_resources[0];
@@ -172,25 +197,51 @@ fn detector_flow_matches_upstream_mock_projects() -> Result<()> {
         ResourceDirectory::find_all(harmony_project_1_test_resource)?;
     let harmony_project_1_test_base = harmony_project_1_test_directories
         .iter()
-        .find(|resource_directory| resource_directory.uri().to_string().contains("/base"))
+        .find(|resource_directory| {
+            resource_directory
+                .path()
+                .to_string_lossy()
+                .contains("/base")
+        })
         .unwrap();
     let profile_directory = ProfileDirectory::locate(harmony_project_1_test_base)?
         .expect("ohosTest base resource should contain profile");
     let profile_files = profile_directory.find_all()?;
     assert!(profile_files
         .iter()
-        .any(|uri| uri.to_string().contains("test_pages.json")));
+        .any(|path| path.to_string_lossy().contains("test_pages.json")));
 
     Ok(())
 }
 
 #[test]
 fn project_detector_rejects_non_file_uri() {
-    let error = match ProjectDetector::new("https://example.com/workspace") {
+    let error = match ProjectDetector::from_uri("https://example.com/workspace") {
         Ok(_) => panic!("expected non-file URI to be rejected"),
         Err(error) => error,
     };
     assert!(matches!(error, DetectorError::UnsupportedUriScheme { .. }));
+}
+
+#[test]
+fn project_detector_normalizes_relative_workspace_paths() -> Result<()> {
+    let detector = ProjectDetector::new(".")?;
+    assert_eq!(
+        detector.workspace_path(),
+        std::env::current_dir().unwrap().as_path()
+    );
+    Ok(())
+}
+
+#[test]
+fn project_detector_accepts_file_uris() -> Result<()> {
+    let current_dir_uri = Uri::file(".")?.to_string();
+    let detector = ProjectDetector::from_uri(&current_dir_uri)?;
+    assert_eq!(
+        detector.workspace_path(),
+        std::env::current_dir().unwrap().as_path()
+    );
+    Ok(())
 }
 
 #[test]
@@ -222,7 +273,7 @@ fn module_find_all_rejects_paths_that_escape_the_project_root() -> Result<()> {
 
 #[test]
 fn invalid_element_json_returns_a_parse_error() -> Result<()> {
-    let element_json = ElementJsonFile::from_source("string.json", "{ invalid json5".to_string())?;
+    let element_json = ElementJsonFile::from_source("string.json", "{ invalid json5")?;
     let error = element_json.parse().unwrap_err();
     assert!(matches!(error, DetectorError::Json5 { .. }));
     Ok(())

@@ -1,28 +1,31 @@
 use crate::element_directory::ElementDirectory;
 use crate::error::{DetectorError, Result};
 use crate::fs_discovery::find_immediate_files;
-use crate::utils::path::{path_is_file, read_to_string};
+use crate::utils::path::{absolute_path, path_is_file, read_to_string};
 use crate::utils::uri::Uri;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tree_sitter::{Parser, Tree};
 
 pub struct ElementJsonFile {
     source_code: String,
-    uri: Uri,
+    path: PathBuf,
 }
 
 impl ElementJsonFile {
     pub fn from_source(
-        element_json_file_uri: impl AsRef<str>,
-        source_code: String,
+        element_json_file_path: impl AsRef<Path>,
+        source_code: impl Into<String>,
     ) -> Result<Self> {
-        let uri = Uri::from_path_or_uri(element_json_file_uri.as_ref())?;
+        let path = absolute_path(element_json_file_path.as_ref())?;
 
-        Ok(Self { source_code, uri })
+        Ok(Self {
+            source_code: source_code.into(),
+            path,
+        })
     }
 
     pub fn load(element_json_file_path: impl AsRef<Path>) -> Result<Option<ElementJsonFile>> {
-        let element_json_file_path = element_json_file_path.as_ref().to_path_buf();
+        let element_json_file_path = absolute_path(element_json_file_path.as_ref())?;
         if !is_element_json_path(&element_json_file_path) {
             return Ok(None);
         }
@@ -35,7 +38,7 @@ impl ElementJsonFile {
 
         Ok(Some(Self {
             source_code: read_source(&element_json_file_path)?,
-            uri: Uri::file(&element_json_file_path)?,
+            path: element_json_file_path,
         }))
     }
 
@@ -50,14 +53,14 @@ impl ElementJsonFile {
     }
 
     pub fn reload(&mut self) -> Result<()> {
-        self.replace_content(read_source(self.uri.as_path())?);
+        self.replace_content(read_source(&self.path)?);
         Ok(())
     }
 
     pub fn find_all(element_directory: &ElementDirectory) -> Result<Vec<ElementJsonFile>> {
         let mut element_json_files = Vec::new();
-        for file_uri in find_immediate_files(element_directory.uri().as_path())? {
-            if let Some(element_json_file) = Self::load(file_uri.as_path())? {
+        for file_path in find_immediate_files(element_directory.path())? {
+            if let Some(element_json_file) = Self::load(&file_path)? {
                 element_json_files.push(element_json_file);
             }
         }
@@ -65,8 +68,12 @@ impl ElementJsonFile {
         Ok(element_json_files)
     }
 
-    pub fn uri(&self) -> &Uri {
-        &self.uri
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+
+    pub fn uri(&self) -> Uri {
+        Uri::from_absolute_path(self.path.clone())
     }
 
     pub fn content(&self) -> &str {
@@ -78,11 +85,11 @@ impl ElementJsonFile {
     }
 
     pub fn parse(&self) -> Result<serde_json::Value> {
-        parse_json5(self.content(), self.uri.as_path())
+        parse_json5(self.content(), self.path())
     }
 
     pub(crate) fn parse_tree(&self) -> Result<Tree> {
-        parse_tree(self.content(), self.uri.as_path())
+        parse_tree(self.content(), self.path())
     }
 }
 

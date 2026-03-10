@@ -1,7 +1,17 @@
 use crate::error::{DetectorError, Result};
+use std::env;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
+
+pub fn absolute_path(path: &Path) -> Result<PathBuf> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+
+    let cwd = env::current_dir().map_err(|source| DetectorError::io(".", source))?;
+    Ok(path_clean::clean(cwd.join(path)))
+}
 
 pub fn canonicalize(path: &Path) -> Result<PathBuf> {
     fs::canonicalize(path).map_err(|source| DetectorError::io(path.to_path_buf(), source))

@@ -1,20 +1,19 @@
 use crate::error::{DetectorError, Result};
 use crate::utils::path::path_is_dir;
-use crate::utils::uri::Uri;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
-pub(crate) fn locate_subdirectory(parent: &Path, name: &str) -> Result<Option<Uri>> {
+pub(crate) fn locate_subdirectory(parent: &Path, name: &str) -> Result<Option<PathBuf>> {
     let subdirectory_path = parent.join(name);
     if !path_is_dir(&subdirectory_path)? {
         return Ok(None);
     }
 
-    Ok(Some(Uri::file(&subdirectory_path)?))
+    Ok(Some(subdirectory_path))
 }
 
-pub(crate) fn find_immediate_files(directory: &Path) -> Result<Vec<Uri>> {
+pub(crate) fn find_immediate_files(directory: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
     let entries = fs::read_dir(directory).map_err(|source| DetectorError::io(directory, source))?;
 
@@ -25,7 +24,7 @@ pub(crate) fn find_immediate_files(directory: &Path) -> Result<Vec<Uri>> {
             .metadata()
             .map_err(|source| DetectorError::io(path.clone(), source))?;
         if metadata.is_file() {
-            files.push(Uri::file(&path)?);
+            files.push(path);
         }
     }
 
@@ -35,7 +34,7 @@ pub(crate) fn find_immediate_files(directory: &Path) -> Result<Vec<Uri>> {
 pub(crate) fn find_matching_directories(
     directory: &Path,
     accept: impl Fn(&str) -> bool,
-) -> Result<Vec<Uri>> {
+) -> Result<Vec<PathBuf>> {
     let mut directories = Vec::new();
     let entries = fs::read_dir(directory).map_err(|source| DetectorError::io(directory, source))?;
 
@@ -51,20 +50,20 @@ pub(crate) fn find_matching_directories(
 
         let directory_name = entry.file_name().to_string_lossy().to_string();
         if accept(&directory_name) {
-            directories.push(Uri::file(&path)?);
+            directories.push(path);
         }
     }
 
     Ok(directories)
 }
 
-pub(crate) fn find_recursive_files(directory: &Path) -> Result<Vec<Uri>> {
+pub(crate) fn find_recursive_files(directory: &Path) -> Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
     for entry in WalkDir::new(directory) {
         let entry = entry.map_err(DetectorError::walkdir)?;
         if entry.file_type().is_file() {
-            files.push(Uri::file(entry.path())?);
+            files.push(entry.path().to_path_buf());
         }
     }
 
