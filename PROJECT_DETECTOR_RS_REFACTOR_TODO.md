@@ -167,12 +167,21 @@ Verification:
 - `cargo test --manifest-path apps/project-detector-rs/Cargo.toml`
 - `cargo clippy --manifest-path apps/project-detector-rs/Cargo.toml --all-targets -- -D warnings`
 
-### P3: Tighten module layout and crate surface
+### [x] P3: Tighten module layout and crate surface
 
-- Reduce what `src/lib.rs` exports directly. Public API should reflect supported usage, not source tree structure.
-- Move implementation-only helpers behind private modules where possible.
-- Document why special cases exist, especially `src/utils/byteorder.rs`; if it is obsolete, remove it. If it is required, explain the constraint in crate docs.
-- Add a short crate-level architecture note describing intended entrypoints and internal layering.
+Completed:
+
+- Replaced the source-tree-shaped public module surface in `src/lib.rs` with an intentional crate-root API that re-exports the supported traversal types, parser/reference types, `Uri`, and shared error types.
+- Moved implementation-oriented modules such as `files`, `references`, and `utils` behind a private crate module tree, keeping only crate-internal visibility where the implementation still needs it.
+- Updated tests and README examples to consume the crate through root-level re-exports instead of implementation module paths.
+- Added crate-level documentation in `src/lib.rs` describing the intended entrypoints, internal layering, and the fact that the source-tree module layout is not the supported API surface.
+- Kept `src/utils/byteorder.rs` as a private compatibility shim and documented why it still exists: it provides libbsd-style byteorder symbols for environments that may resolve them dynamically at runtime.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/project-detector-rs/Cargo.toml`
+- `cargo test --manifest-path apps/project-detector-rs/Cargo.toml`
+- `cargo clippy --manifest-path apps/project-detector-rs/Cargo.toml --all-targets -- -D warnings`
 
 ### P3: Bring tests in line with the cleanup
 

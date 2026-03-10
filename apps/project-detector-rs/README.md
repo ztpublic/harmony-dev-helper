@@ -46,11 +46,10 @@ Objects are plain values and are traversed by borrowing rather than keeping pare
 The main entry points are:
 
 ```rust
-use project_detector_rs::project::Project;
-use project_detector_rs::project_detector::ProjectDetector;
+use project_detector_rs::{Project, ProjectDetector};
 use std::path::Path;
 
-fn load_projects(workspace: &Path) -> project_detector_rs::error::Result<()> {
+fn load_projects(workspace: &Path) -> project_detector_rs::Result<()> {
     let detector = ProjectDetector::new(workspace)?;
     let projects = Project::find_all(&detector)?;
 
@@ -65,18 +64,13 @@ fn load_projects(workspace: &Path) -> project_detector_rs::error::Result<()> {
 Typical traversal looks like this:
 
 ```rust
-use project_detector_rs::element_directory::ElementDirectory;
-use project_detector_rs::files::element_json_file::ElementJsonFile;
-use project_detector_rs::module::Module;
-use project_detector_rs::product::Product;
-use project_detector_rs::project::Project;
-use project_detector_rs::project_detector::ProjectDetector;
-use project_detector_rs::references::element_json_file_reference::ElementJsonFileReference;
-use project_detector_rs::resource::Resource;
-use project_detector_rs::resource_directory::ResourceDirectory;
+use project_detector_rs::{
+    ElementDirectory, ElementJsonFile, ElementJsonFileReference, Module, Product, Project,
+    ProjectDetector, Resource, ResourceDirectory,
+};
 use std::path::Path;
 
-fn scan(workspace: &Path) -> project_detector_rs::error::Result<()> {
+fn scan(workspace: &Path) -> project_detector_rs::Result<()> {
     let detector = ProjectDetector::new(workspace)?;
 
     for project in Project::find_all(&detector)? {

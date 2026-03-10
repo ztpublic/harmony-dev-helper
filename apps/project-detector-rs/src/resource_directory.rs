@@ -2,7 +2,7 @@ use crate::error::{DetectorError, Result};
 use crate::fs_discovery::find_matching_directories;
 use crate::resource::Resource;
 use crate::utils::path::{absolute_path, path_is_dir};
-use crate::utils::qualifier::utils_impl::QualifierUtils;
+use crate::utils::qualifier::QualifierUtils;
 use crate::utils::uri::Uri;
 use serde_json::Value;
 use std::path::{Path, PathBuf};

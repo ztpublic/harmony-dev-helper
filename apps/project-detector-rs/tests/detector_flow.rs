@@ -1,16 +1,8 @@
-use project_detector_rs::element_directory::ElementDirectory;
-use project_detector_rs::error::{DetectorError, Result};
-use project_detector_rs::files::element_json_file::ElementJsonFile;
-use project_detector_rs::module::Module;
-use project_detector_rs::product::Product;
-use project_detector_rs::profile_directory::ProfileDirectory;
-use project_detector_rs::project::Project;
-use project_detector_rs::project_detector::ProjectDetector;
-use project_detector_rs::rawfile_directory::RawfileDirectory;
-use project_detector_rs::references::element_json_file_reference::ElementJsonFileReference;
-use project_detector_rs::resource::Resource;
-use project_detector_rs::resource_directory::ResourceDirectory;
-use project_detector_rs::utils::uri::Uri;
+use project_detector_rs::{
+    DetectorError, ElementDirectory, ElementJsonFile, ElementJsonFileReference, Module, Product,
+    ProfileDirectory, Project, ProjectDetector, RawfileDirectory, Resource, ResourceDirectory,
+    Result, Uri,
+};
 use std::path::{Path, PathBuf};
 use tempfile::tempdir;
 
