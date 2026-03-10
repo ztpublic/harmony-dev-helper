@@ -135,12 +135,21 @@ Verification:
 - `cargo test --manifest-path apps/project-detector-rs/Cargo.toml`
 - `cargo clippy --manifest-path apps/project-detector-rs/Cargo.toml --all-targets -- -D warnings`
 
-### P2: Simplify parser and resource discovery code
+### [x] P2: Simplify parser and resource discovery code
 
-- Move `element/*.json` loading, parsing, and reference extraction into smaller units with single responsibilities.
-- Rework `ElementJsonFileReference::find_all` into helper functions with explicit invariants instead of one large nested traversal.
-- Re-evaluate whether per-instance `Arc<Mutex<Parser>>` is necessary. If tree-sitter stays, keep parser ownership local to parsing work unless sharing is proven useful.
-- Deduplicate the directory wrapper pattern used by `ElementDirectory`, `MediaDirectory`, `ProfileDirectory`, `RawfileDirectory`, and `ResfileDirectory`.
+Completed:
+
+- Split `src/files/element_json_file.rs` into smaller loading and parsing helpers so file I/O, JSON5 parsing, and tree-sitter parsing each have their own entrypoint.
+- Removed the per-instance parser ownership from `ElementJsonFile`; tree-sitter parsers are now created locally for parse work instead of being stored behind a mutex on every file value.
+- Reworked `src/references/element_json_file_reference.rs` into helper-based traversal using explicit pair/object parsing invariants rather than one large nested walk.
+- Added focused `ElementJsonFileReference` tests for missing `name`, missing `value`, non-string fields, and nested unrelated JSON nodes.
+- Deduplicated resource subdirectory discovery and file collection in a shared internal filesystem helper used by `ElementDirectory`, `MediaDirectory`, `ProfileDirectory`, `RawfileDirectory`, `ResfileDirectory`, and `ResourceDirectory`.
+
+Verification:
+
+- `cargo fmt --manifest-path apps/project-detector-rs/Cargo.toml`
+- `cargo test --manifest-path apps/project-detector-rs/Cargo.toml`
+- `cargo clippy --manifest-path apps/project-detector-rs/Cargo.toml --all-targets -- -D warnings`
 
 ### P2: Normalize path and URI handling
 

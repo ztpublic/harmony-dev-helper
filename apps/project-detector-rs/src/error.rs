@@ -38,8 +38,6 @@ pub enum DetectorError {
     TreeSitterLanguage { message: String },
     #[error("tree-sitter parse failed for {path}")]
     TreeSitterParse { path: PathBuf },
-    #[error("parser lock poisoned for {path}")]
-    ParserPoisoned { path: PathBuf },
     #[error("non-utf8 tree-sitter text at {path}: {message}")]
     InvalidUtf8Text { path: PathBuf, message: String },
     #[error("path '{candidate}' escapes base directory '{base}'")]

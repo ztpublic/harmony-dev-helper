@@ -1,4 +1,5 @@
 mod build_profile;
+mod fs_discovery;
 
 pub mod element_directory;
 pub mod error;

@@ -1,10 +1,10 @@
 use crate::error::{DetectorError, Result};
+use crate::fs_discovery::find_matching_directories;
 use crate::resource::Resource;
 use crate::utils::path::path_is_dir;
 use crate::utils::qualifier::utils_impl::QualifierUtils;
 use crate::utils::uri::Uri;
 use serde_json::Value;
-use std::fs;
 use std::path::Path;
 
 pub struct ResourceDirectory {
@@ -13,34 +13,10 @@ pub struct ResourceDirectory {
 
 impl ResourceDirectory {
     pub fn find_all(resource: &Resource) -> Result<Vec<ResourceDirectory>> {
-        let mut resource_directories = Vec::new();
-        let resource_directory = resource.uri();
-
-        let dirs = fs::read_dir(resource_directory.as_path())
-            .map_err(|source| DetectorError::io(resource_directory.as_path(), source))?;
-
-        for dir in dirs {
-            let dir =
-                dir.map_err(|source| DetectorError::io(resource_directory.as_path(), source))?;
-            let path = dir.path();
-            let metadata = dir
-                .metadata()
-                .map_err(|source| DetectorError::io(path.clone(), source))?;
-            if !metadata.is_dir() {
-                continue;
-            }
-
-            let dir_name = dir.file_name().to_string_lossy().to_string();
-            if !is_resource_directory_name(&dir_name) {
-                continue;
-            }
-
-            resource_directories.push(ResourceDirectory {
-                uri: Uri::file(&path)?,
-            })
-        }
-
-        Ok(resource_directories)
+        find_matching_directories(resource.uri().as_path(), is_resource_directory_name)?
+            .into_iter()
+            .map(|uri| Ok(ResourceDirectory { uri }))
+            .collect()
     }
 
     pub fn load(resource_directory_path: impl AsRef<Path>) -> Result<Option<ResourceDirectory>> {
