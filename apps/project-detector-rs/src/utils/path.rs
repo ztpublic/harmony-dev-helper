@@ -51,3 +51,40 @@ pub fn resolve_within(base: &Path, child: &Path) -> Result<PathBuf> {
 
     Ok(candidate)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn resolve_within_normalizes_relative_segments_inside_the_base() -> Result<()> {
+        let temp_dir = tempdir().unwrap();
+        let base = temp_dir.path().join("workspace");
+        std::fs::create_dir_all(base.join("entry/src")).unwrap();
+
+        let resolved = resolve_within(&base, Path::new("entry/./nested/../src"))?;
+
+        assert_eq!(resolved, canonicalize(&base)?.join("entry/src"));
+        Ok(())
+    }
+
+    #[test]
+    fn resolve_within_rejects_absolute_paths_outside_the_base() -> Result<()> {
+        let temp_dir = tempdir().unwrap();
+        let base = temp_dir.path().join("workspace");
+        let outside = temp_dir.path().join("outside");
+        std::fs::create_dir_all(&base).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+
+        let error = resolve_within(&base, &outside).unwrap_err();
+        assert!(matches!(
+            error,
+            DetectorError::PathEscapesBase {
+                base: error_base,
+                candidate
+            } if error_base == canonicalize(&base)? && candidate == path_clean::clean(&outside)
+        ));
+        Ok(())
+    }
+}

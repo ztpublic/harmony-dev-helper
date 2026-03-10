@@ -56,3 +56,19 @@ impl fmt::Display for Uri {
         write!(f, "{}", self.url)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn file_uri_round_trip_keeps_the_normalized_filesystem_path() -> Result<()> {
+        let uri = Uri::file("./src/../src")?;
+        let expected_path = absolute_path(path::Path::new("./src/../src"))?;
+        let reparsed = Uri::parse(uri.to_string())?;
+
+        assert_eq!(uri.as_path(), expected_path.as_path());
+        assert_eq!(reparsed.as_path(), expected_path.as_path());
+        Ok(())
+    }
+}

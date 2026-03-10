@@ -114,3 +114,34 @@ fn parse_tree(source_code: &str, path: &Path) -> Result<Tree> {
             path: path.to_path_buf(),
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn load_returns_none_for_non_json_files() -> Result<()> {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("strings.txt");
+        std::fs::write(&path, "ignored").unwrap();
+
+        assert!(ElementJsonFile::load(&path)?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn load_rejects_missing_json_files() {
+        let temp_dir = tempdir().unwrap();
+        let path = temp_dir.path().join("missing.json");
+
+        let error = match ElementJsonFile::load(&path) {
+            Ok(_) => panic!("expected a missing element file to be rejected"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            DetectorError::ExpectedFile { path: error_path } if error_path == path
+        ));
+    }
+}

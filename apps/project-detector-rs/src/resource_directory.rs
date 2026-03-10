@@ -73,3 +73,34 @@ fn is_resource_directory_name(dir_name: &str) -> bool {
         || dir_name == "resfile"
         || !QualifierUtils::analyze_qualifier(dir_name.to_string()).is_empty()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn load_rejects_missing_directories() {
+        let temp_dir = tempdir().unwrap();
+        let missing_directory = temp_dir.path().join("base");
+
+        let error = match ResourceDirectory::load(&missing_directory) {
+            Ok(_) => panic!("expected a missing directory to be rejected"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            DetectorError::ExpectedDirectory { path } if path == missing_directory
+        ));
+    }
+
+    #[test]
+    fn load_returns_none_for_non_resource_directory_names() -> Result<()> {
+        let temp_dir = tempdir().unwrap();
+        let directory = temp_dir.path().join("not-a-resource-dir");
+        std::fs::create_dir(&directory).unwrap();
+
+        assert!(ResourceDirectory::load(&directory)?.is_none());
+        Ok(())
+    }
+}

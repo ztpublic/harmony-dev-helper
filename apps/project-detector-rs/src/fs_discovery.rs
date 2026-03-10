@@ -69,3 +69,80 @@ pub(crate) fn find_recursive_files(directory: &Path) -> Result<Vec<PathBuf>> {
 
     Ok(files)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
+
+    #[cfg(unix)]
+    struct PermissionRestore {
+        path: PathBuf,
+        mode: u32,
+    }
+
+    #[cfg(unix)]
+    impl PermissionRestore {
+        fn lock(path: &Path) -> Self {
+            let mode = std::fs::metadata(path).unwrap().permissions().mode();
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+            Self {
+                path: path.to_path_buf(),
+                mode,
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for PermissionRestore {
+        fn drop(&mut self) {
+            let _ =
+                std::fs::set_permissions(&self.path, std::fs::Permissions::from_mode(self.mode));
+        }
+    }
+
+    #[test]
+    fn find_immediate_files_reports_missing_directories() {
+        let temp_dir = tempdir().unwrap();
+        let missing_directory = temp_dir.path().join("missing");
+
+        let error = find_immediate_files(&missing_directory).unwrap_err();
+        assert!(matches!(
+            error,
+            DetectorError::Io { path, .. } if path == missing_directory
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_matching_directories_propagates_read_dir_failures() {
+        let temp_dir = tempdir().unwrap();
+        let locked_directory = temp_dir.path().join("locked");
+        std::fs::create_dir(&locked_directory).unwrap();
+        let _restore = PermissionRestore::lock(&locked_directory);
+
+        let error = find_matching_directories(&locked_directory, |_| true).unwrap_err();
+        assert!(matches!(
+            error,
+            DetectorError::Io { path, .. } if path == locked_directory
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn find_recursive_files_propagates_walkdir_failures() {
+        let temp_dir = tempdir().unwrap();
+        let locked_directory = temp_dir.path().join("locked");
+        std::fs::create_dir(&locked_directory).unwrap();
+        let _restore = PermissionRestore::lock(&locked_directory);
+
+        let error = find_recursive_files(&locked_directory).unwrap_err();
+        assert!(matches!(
+            error,
+            DetectorError::WalkDir { path, .. } if path == locked_directory
+        ));
+    }
+}

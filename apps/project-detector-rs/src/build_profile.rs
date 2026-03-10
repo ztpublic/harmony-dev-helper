@@ -211,3 +211,194 @@ fn validate_module_build_profile(profile: &ModuleBuildProfile, path: &Path) -> R
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    fn write_build_profile(root: &Path, content: &str) -> PathBuf {
+        std::fs::create_dir_all(root).unwrap();
+        let path = root.join("build-profile.json5");
+        std::fs::write(&path, content).unwrap();
+        path
+    }
+
+    #[test]
+    fn load_project_build_profile_parses_typed_modules() -> Result<()> {
+        let temp_dir = tempdir().unwrap();
+        let build_profile_path = write_build_profile(
+            temp_dir.path(),
+            r#"
+            {
+              app: {},
+              modules: [
+                { name: "entry", srcPath: "entry" }
+              ]
+            }
+            "#,
+        );
+
+        let loaded = load_project_build_profile(temp_dir.path())?
+            .expect("project fixture should be detected as a project profile");
+
+        assert_eq!(loaded.path, build_profile_path);
+        assert!(loaded.content.contains("modules"));
+        assert_eq!(loaded.profile.modules().len(), 1);
+        assert_eq!(loaded.profile.modules()[0].name(), "entry");
+        assert_eq!(loaded.profile.modules()[0].src_path(), "entry");
+        assert_eq!(loaded.raw["modules"][0]["srcPath"], "entry");
+        Ok(())
+    }
+
+    #[test]
+    fn load_project_build_profile_returns_none_for_module_profiles() -> Result<()> {
+        let temp_dir = tempdir().unwrap();
+        write_build_profile(
+            temp_dir.path(),
+            r#"
+            {
+              targets: [
+                { name: "default" }
+              ]
+            }
+            "#,
+        );
+
+        assert!(load_project_build_profile(temp_dir.path())?.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn load_project_build_profile_rejects_blank_module_fields() {
+        let temp_dir = tempdir().unwrap();
+        let build_profile_path = write_build_profile(
+            temp_dir.path(),
+            r#"
+            {
+              app: {},
+              modules: [
+                { name: "", srcPath: "entry" }
+              ]
+            }
+            "#,
+        );
+
+        let error = match load_project_build_profile(temp_dir.path()) {
+            Ok(_) => panic!("expected an invalid project build profile"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            DetectorError::InvalidProjectBuildProfile { path } if path == build_profile_path
+        ));
+    }
+
+    #[test]
+    fn load_module_build_profile_parses_typed_targets() -> Result<()> {
+        let temp_dir = tempdir().unwrap();
+        let build_profile_path = write_build_profile(
+            temp_dir.path(),
+            r#"
+            {
+              targets: [
+                {
+                  name: "default",
+                  source: {
+                    sourceRoots: ["src/custom"]
+                  },
+                  resource: {
+                    directories: ["src/custom/resources"]
+                  }
+                },
+                {
+                  name: "ohosTest"
+                }
+              ]
+            }
+            "#,
+        );
+
+        let loaded = load_module_build_profile(temp_dir.path())?;
+        let default_target = &loaded.profile.targets()[0];
+        let default_source_roots = default_target
+            .source_roots()
+            .expect("default target should expose source roots");
+        let default_resource_directories = default_target
+            .resource_directories()
+            .expect("default target should expose resource directories");
+        let test_target = &loaded.profile.targets()[1];
+
+        assert_eq!(loaded.path, build_profile_path);
+        assert_eq!(loaded.profile.targets().len(), 2);
+        assert_eq!(default_target.name(), "default");
+        assert_eq!(default_source_roots, &[String::from("src/custom")]);
+        assert_eq!(
+            default_resource_directories,
+            &[String::from("src/custom/resources")]
+        );
+        assert_eq!(test_target.name(), "ohosTest");
+        assert!(test_target.source_roots().is_none());
+        assert!(test_target.resource_directories().is_none());
+        assert_eq!(loaded.raw["targets"][1]["name"], "ohosTest");
+        Ok(())
+    }
+
+    #[test]
+    fn load_module_build_profile_rejects_non_string_source_roots() {
+        let temp_dir = tempdir().unwrap();
+        let build_profile_path = write_build_profile(
+            temp_dir.path(),
+            r#"
+            {
+              targets: [
+                {
+                  name: "default",
+                  source: {
+                    sourceRoots: ["src/main", 1]
+                  }
+                }
+              ]
+            }
+            "#,
+        );
+
+        let error = match load_module_build_profile(temp_dir.path()) {
+            Ok(_) => panic!("expected an invalid module build profile"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            DetectorError::InvalidModuleBuildProfile { path } if path == build_profile_path
+        ));
+    }
+
+    #[test]
+    fn load_module_build_profile_rejects_non_string_resource_directories() {
+        let temp_dir = tempdir().unwrap();
+        let build_profile_path = write_build_profile(
+            temp_dir.path(),
+            r#"
+            {
+              targets: [
+                {
+                  name: "default",
+                  resource: {
+                    directories: ["src/main/resources", {}]
+                  }
+                }
+              ]
+            }
+            "#,
+        );
+
+        let error = match load_module_build_profile(temp_dir.path()) {
+            Ok(_) => panic!("expected an invalid module build profile"),
+            Err(error) => error,
+        };
+        assert!(matches!(
+            error,
+            DetectorError::InvalidModuleBuildProfile { path } if path == build_profile_path
+        ));
+    }
+}
