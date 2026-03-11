@@ -30,6 +30,7 @@ import {
 
 const WINDOWS_ABSOLUTE_PATH_REGEX = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_REGEX = /^\\\\/;
+const CREATE_EMULATOR_ACTION_VALUE = "__create_emulator__";
 
 function isAbsolutePath(path: string): boolean {
   return path.startsWith("/") || WINDOWS_ABSOLUTE_PATH_REGEX.test(path) || WINDOWS_UNC_PATH_REGEX.test(path);
@@ -147,8 +148,9 @@ export default function App() {
     state === "open" &&
     hdcBinConfig.available &&
     deviceSelection.isSupported &&
-    !deviceSelection.isRefreshing &&
-    deviceSelection.devices.length > 0;
+    deviceSelection.status === "ready" &&
+    !deviceSelection.isRefreshing;
+  const showCreateEmulatorAction = isComboboxEnabled && deviceSelection.devices.length === 0;
 
   const placeholder = (() => {
     if (state !== "open") {
@@ -336,11 +338,22 @@ export default function App() {
               value={deviceSelection.selectedDevice ?? ""}
               disabled={!isComboboxEnabled}
               onChange={(event) => {
-                deviceSelection.selectDevice(event.target.value);
+                const nextValue = event.target.value;
+                if (nextValue === CREATE_EMULATOR_ACTION_VALUE) {
+                  setActiveMainTab("emulators");
+                  return;
+                }
+
+                deviceSelection.selectDevice(nextValue);
               }}
             >
               {deviceSelection.devices.length === 0 ? (
-                <option value="">{placeholder}</option>
+                <>
+                  <option value="">{placeholder}</option>
+                  {showCreateEmulatorAction ? (
+                    <option value={CREATE_EMULATOR_ACTION_VALUE}>Create Emulator</option>
+                  ) : null}
+                </>
               ) : (
                 deviceSelection.devices.map((device) => (
                   <option key={device} value={device}>
