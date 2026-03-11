@@ -29,6 +29,16 @@ export interface HostCapabilities {
   "hdc.hilog.listPids": boolean;
   "hdc.hilog.subscribe": boolean;
   "hdc.hilog.unsubscribe": boolean;
+  "emulator.getEnvironment": boolean;
+  "emulator.listImages": boolean;
+  "emulator.listDownloadJobs": boolean;
+  "emulator.getCreateDeviceOptions": boolean;
+  "emulator.downloadImage": boolean;
+  "emulator.listDevices": boolean;
+  "emulator.createDevice": boolean;
+  "emulator.startDevice": boolean;
+  "emulator.stopDevice": boolean;
+  "emulator.deleteDevice": boolean;
 }
 
 export interface IdeCapabilities {
@@ -249,6 +259,132 @@ export interface McpToolSummary {
   description?: string;
 }
 
+export interface EmulatorResolvedPaths {
+  imageBasePath: string;
+  deployedPath: string;
+  cachePath: string;
+  sdkPath: string;
+  configPath: string;
+  logPath: string;
+  emulatorPath: string;
+}
+
+export interface EmulatorEnvironmentResult {
+  compatibility: boolean;
+  message?: string;
+  paths: EmulatorResolvedPaths;
+}
+
+export type EmulatorImageStatus = "installed" | "available" | "downloading";
+export type EmulatorDownloadStage = "download" | "checksum" | "extract";
+export type EmulatorDownloadJobStatus = "running" | "succeeded" | "failed";
+export type EmulatorSpeedUnit = "KB" | "MB";
+
+export interface EmulatorImageSummary {
+  relativePath: string;
+  displayName: string;
+  apiVersion: number;
+  deviceType: string;
+  version: string;
+  platformVersion?: string | null;
+  guestVersion?: string | null;
+  releaseType: string;
+  description: string;
+  status: EmulatorImageStatus;
+  localPath?: string | null;
+  archiveSizeBytes?: number | null;
+  checksum?: string | null;
+}
+
+export interface EmulatorDownloadJobSummary {
+  jobId: string;
+  imageRelativePath: string;
+  stage: EmulatorDownloadStage;
+  status: EmulatorDownloadJobStatus;
+  progress: number;
+  increment: number;
+  network?: number | null;
+  unit?: EmulatorSpeedUnit | null;
+  reset: boolean;
+  message?: string;
+}
+
+export interface EmulatorProductPreset {
+  name: string;
+  deviceType: string;
+  screenWidth: string;
+  screenHeight: string;
+  screenDiagonal: string;
+  screenDensity: string;
+  defaultCpuCores: number;
+  defaultMemoryRamMb: number;
+  defaultDataDiskMb: number;
+}
+
+export interface EmulatorCreateDeviceOptionsResult {
+  imageRelativePath: string;
+  productPresets: EmulatorProductPreset[];
+}
+
+export interface EmulatorDeviceSummary {
+  name: string;
+  instancePath: string;
+  deviceType: string;
+  model: string | null;
+  apiVersion: number;
+  showVersion: string;
+  storageSizeBytes: number;
+  snapshotBase64: string | null;
+}
+
+export interface EmulatorCreateDeviceResult {
+  device: EmulatorDeviceSummary;
+}
+
+export interface EmulatorStartDeviceResult {
+  name: string;
+}
+
+export interface EmulatorStopDeviceResult {
+  name: string;
+}
+
+export interface EmulatorDeleteDeviceResult {
+  name: string;
+}
+
+export interface EmulatorDownloadImageResult {
+  jobId: string;
+}
+
+export interface EmulatorDownloadProgressEventData {
+  jobId: string;
+  imageRelativePath: string;
+  stage: EmulatorDownloadStage;
+  status: "running";
+  progress: number;
+  increment: number;
+  network?: number | null;
+  unit?: EmulatorSpeedUnit | null;
+  reset: boolean;
+}
+
+export interface EmulatorDownloadFinishedEventData {
+  jobId: string;
+  imageRelativePath: string;
+  stage: "extract";
+  status: "succeeded";
+  image: EmulatorImageSummary;
+}
+
+export interface EmulatorDownloadFailedEventData {
+  jobId: string;
+  imageRelativePath: string;
+  stage: EmulatorDownloadStage;
+  status: "failed";
+  message: string;
+}
+
 export type InvokeAction =
   | "host.getCapabilities"
   | "mcp.listTools"
@@ -264,7 +400,17 @@ export type InvokeAction =
   | "hdc.setBinPath"
   | "hdc.hilog.listPids"
   | "hdc.hilog.subscribe"
-  | "hdc.hilog.unsubscribe";
+  | "hdc.hilog.unsubscribe"
+  | "emulator.getEnvironment"
+  | "emulator.listImages"
+  | "emulator.listDownloadJobs"
+  | "emulator.getCreateDeviceOptions"
+  | "emulator.downloadImage"
+  | "emulator.listDevices"
+  | "emulator.createDevice"
+  | "emulator.startDevice"
+  | "emulator.stopDevice"
+  | "emulator.deleteDevice";
 
 export interface InvokeArgsByAction {
   "host.getCapabilities": Record<string, never>;
@@ -282,6 +428,26 @@ export interface InvokeArgsByAction {
   "hdc.hilog.listPids": { connectKey: string };
   "hdc.hilog.subscribe": { connectKey: string; level?: string; pid?: number };
   "hdc.hilog.unsubscribe": { subscriptionId?: string };
+  "emulator.getEnvironment": Record<string, never>;
+  "emulator.listImages": Record<string, never>;
+  "emulator.listDownloadJobs": Record<string, never>;
+  "emulator.getCreateDeviceOptions": { relativePath: string };
+  "emulator.downloadImage": { relativePath: string };
+  "emulator.listDevices": Record<string, never>;
+  "emulator.createDevice": {
+    relativePath: string;
+    productDeviceType: string;
+    productName: string;
+    name: string;
+    cpuCores: number;
+    memoryRamMb: number;
+    dataDiskMb: number;
+    vendorCountry?: string;
+    isPublic?: boolean;
+  };
+  "emulator.startDevice": { name: string };
+  "emulator.stopDevice": { name: string };
+  "emulator.deleteDevice": { name: string };
 }
 
 export interface InvokeResultByAction {
@@ -300,6 +466,16 @@ export interface InvokeResultByAction {
   "hdc.hilog.listPids": HdcHilogListPidsResult;
   "hdc.hilog.subscribe": HdcHilogSubscribeResult;
   "hdc.hilog.unsubscribe": HdcHilogUnsubscribeResult;
+  "emulator.getEnvironment": EmulatorEnvironmentResult;
+  "emulator.listImages": { images: EmulatorImageSummary[] };
+  "emulator.listDownloadJobs": { jobs: EmulatorDownloadJobSummary[] };
+  "emulator.getCreateDeviceOptions": EmulatorCreateDeviceOptionsResult;
+  "emulator.downloadImage": EmulatorDownloadImageResult;
+  "emulator.listDevices": { devices: EmulatorDeviceSummary[] };
+  "emulator.createDevice": EmulatorCreateDeviceResult;
+  "emulator.startDevice": EmulatorStartDeviceResult;
+  "emulator.stopDevice": EmulatorStopDeviceResult;
+  "emulator.deleteDevice": EmulatorDeleteDeviceResult;
 }
 
 type InvokePayload = {
@@ -326,6 +502,18 @@ export type HilogEventPayload =
   | {
       name: "hdc.hilog.state";
       data: HdcHilogStateEventData;
+    }
+  | {
+      name: "emulator.download.progress";
+      data: EmulatorDownloadProgressEventData;
+    }
+  | {
+      name: "emulator.download.finished";
+      data: EmulatorDownloadFinishedEventData;
+    }
+  | {
+      name: "emulator.download.failed";
+      data: EmulatorDownloadFailedEventData;
     };
 
 export type HostEventPayload =

@@ -12,6 +12,7 @@ import { useHdcBinConfig } from "./features/hdc/useHdcBinConfig";
 import { useHdcDeviceSelection } from "./features/hdc/useHdcDeviceSelection";
 import { HilogConsolePanel } from "./features/hilog/HilogConsolePanel";
 import { McpToolsPanel } from "./features/mcp/McpToolsPanel";
+import { EmulatorsPanel } from "./features/emulators/EmulatorsPanel";
 import {
   DEFAULT_MAIN_PANEL_TAB_ID,
   MAIN_PANEL_TABS,
@@ -301,6 +302,15 @@ export default function App() {
         openLocalPathInEditor={openLocalPathInEditor}
         pickUploadFiles={pickUploadFiles}
         pickDownloadDirectory={pickDownloadDirectory}
+      />
+    ),
+    emulators: (
+      <EmulatorsPanel
+        client={client}
+        connectionState={state}
+        hdcAvailable={hdcBinConfig.available}
+        currentHdcDevices={deviceSelection.devices}
+        selectHdcDevice={deviceSelection.selectDevice}
       />
     ),
     mcpTools: (

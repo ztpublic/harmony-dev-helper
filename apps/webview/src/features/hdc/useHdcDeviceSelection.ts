@@ -21,6 +21,7 @@ interface ListTargetsOptions {
 
 const DEFAULT_POLL_MS = 5_000;
 const DEVICE_LABEL_RETRY_MS = 30_000;
+const QEMU_HVD_NAME_PARAM = "ohos.qemu.hvd.name";
 const PRODUCT_NAME_PARAM = "const.product.name";
 const PRODUCT_MODEL_PARAM = "const.product.model";
 const PRODUCT_BRAND_PARAM = "const.product.brand";
@@ -65,13 +66,18 @@ function cleanParameterValue(value: string | undefined): string | undefined {
 }
 
 function buildDeviceLabel(connectKey: string, parameters: Record<string, string>): string {
+  const emulatorName = cleanParameterValue(parameters[QEMU_HVD_NAME_PARAM]);
   const name = cleanParameterValue(parameters[PRODUCT_NAME_PARAM]);
   const model = cleanParameterValue(parameters[PRODUCT_MODEL_PARAM]);
   const brand = cleanParameterValue(parameters[PRODUCT_BRAND_PARAM]);
 
-  const primary = name ?? (brand && model ? `${brand} ${model}` : model ?? brand);
+  const primary = emulatorName ?? name ?? (brand && model ? `${brand} ${model}` : model ?? brand);
   if (!primary) {
     return connectKey;
+  }
+
+  if (emulatorName) {
+    return `${emulatorName} · ${connectKey}`;
   }
 
   if (name && model && name !== model) {
@@ -332,14 +338,14 @@ export function useHdcDeviceSelection({
   const selectDevice = useCallback(
     (connectKey: string) => {
       setSelectedDevice((current) => {
-        if (!devices.includes(connectKey)) {
+        if (!connectKey.trim()) {
           return current;
         }
 
         return connectKey;
       });
     },
-    [devices]
+    []
   );
 
   return useMemo(

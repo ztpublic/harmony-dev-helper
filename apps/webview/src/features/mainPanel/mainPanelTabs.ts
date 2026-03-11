@@ -3,6 +3,7 @@ import type { HarmonyHost } from "@harmony/protocol";
 export const MAIN_PANEL_TABS = [
   { id: "hilog", label: "Hilog" },
   { id: "fileExplorer", label: "File Explorer" },
+  { id: "emulators", label: "Emulators" },
   { id: "mcpTools", label: "MCP tools" }
 ] as const;
 

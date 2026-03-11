@@ -13,9 +13,18 @@ use tokio::sync::{mpsc, oneshot};
 use tokio::time::{interval, MissedTickBehavior};
 use tokio_tungstenite::{accept_async, tungstenite::Message};
 
+mod emulator;
 mod hdc_bin;
 mod mcp;
 
+use emulator::{
+    create_device as emulator_create_device, delete_device as emulator_delete_device,
+    download_image as emulator_download_image, get_create_device_options as emulator_get_create_device_options,
+    get_environment as emulator_get_environment, list_devices as emulator_list_devices,
+    list_images as emulator_list_images, start_device as emulator_start_device,
+    stop_device as emulator_stop_device, EmulatorCreateDeviceArgs, EmulatorSessionState,
+    list_download_jobs as emulator_list_download_jobs,
+};
 use hdc_bin::{build_hdc_client_from_config, get_bin_config, set_custom_bin_path};
 use mcp::{list_builtin_mcp_tools, run_mcp_http_server};
 
@@ -34,7 +43,7 @@ const FS_DOWNLOAD_TEMP_MAX_BYTES_DEFAULT: u64 = 10 * 1024 * 1024;
 static NEXT_MESSAGE_ID: AtomicU64 = AtomicU64::new(1);
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Envelope {
+pub(crate) struct Envelope {
     id: String,
     #[serde(rename = "type")]
     kind: String,
@@ -86,6 +95,7 @@ impl ActiveHilogSubscription {
 struct ClientSession {
     outbound_tx: mpsc::Sender<Envelope>,
     active_hilog: Option<ActiveHilogSubscription>,
+    emulator_session: EmulatorSessionState,
 }
 
 impl ClientSession {
@@ -93,6 +103,7 @@ impl ClientSession {
         Self {
             outbound_tx,
             active_hilog: None,
+            emulator_session: EmulatorSessionState::default(),
         }
     }
 
@@ -191,7 +202,7 @@ fn now_ms() -> u64 {
     now.as_millis() as u64
 }
 
-fn next_message_id(prefix: &str) -> String {
+pub(crate) fn next_message_id(prefix: &str) -> String {
     let sequence = NEXT_MESSAGE_ID.fetch_add(1, Ordering::Relaxed);
     format!("{prefix}-{}-{sequence}", now_ms())
 }
@@ -228,7 +239,7 @@ pub fn derive_default_mcp_http_addr(ws_addr: &str) -> Result<String, String> {
     Ok(format!("{host}:{mcp_port}"))
 }
 
-fn host_message(id: String, kind: &str, payload: Value) -> Envelope {
+pub(crate) fn host_message(id: String, kind: &str, payload: Value) -> Envelope {
     Envelope {
         id,
         kind: kind.to_string(),
@@ -308,6 +319,22 @@ fn optional_positive_i64_arg(args: &Value, key: &str) -> Result<Option<i64>, Str
     }
 
     Ok(Some(raw))
+}
+
+fn required_positive_u32_arg(args: &Value, key: &str) -> Result<u32, String> {
+    let value = args
+        .get(key)
+        .ok_or_else(|| format!("`{key}` is required"))?;
+
+    let Some(raw) = value.as_i64() else {
+        return Err(format!("`{key}` must be a positive integer"));
+    };
+
+    if raw <= 0 || raw > u32::MAX as i64 {
+        return Err(format!("`{key}` must be a positive integer"));
+    }
+
+    Ok(raw as u32)
 }
 
 fn optional_bool_arg(args: &Value, key: &str) -> Result<Option<bool>, String> {
@@ -635,6 +662,17 @@ fn hdc_bin_error(id: String, message: String) -> Envelope {
         "error",
         json!({
           "code": "HDC_BIN_UNAVAILABLE",
+          "message": message
+        }),
+    )
+}
+
+fn emulator_error(id: String, message: String) -> Envelope {
+    host_message(
+        id,
+        "error",
+        json!({
+          "code": "EMULATOR_ERROR",
           "message": message
         }),
     )
@@ -1545,7 +1583,17 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
                   "hdc.setBinPath": true,
                   "hdc.hilog.listPids": true,
                   "hdc.hilog.subscribe": true,
-                  "hdc.hilog.unsubscribe": true
+                  "hdc.hilog.unsubscribe": true,
+                  "emulator.getEnvironment": true,
+                  "emulator.listImages": true,
+                  "emulator.listDownloadJobs": true,
+                  "emulator.getCreateDeviceOptions": true,
+                  "emulator.downloadImage": true,
+                  "emulator.listDevices": true,
+                  "emulator.createDevice": true,
+                  "emulator.startDevice": true,
+                  "emulator.stopDevice": true,
+                  "emulator.deleteDevice": true
                 }
               }
             }),
@@ -1717,6 +1765,347 @@ async fn handle_invoke(id: String, payload: Value, session: &mut ClientSession) 
         "hdc.fs.delete" => handle_fs_delete(id, invoke.args).await,
         "hdc.hilog.subscribe" => handle_hilog_subscribe(id, invoke.args, session).await,
         "hdc.hilog.unsubscribe" => handle_hilog_unsubscribe(id, invoke.args, session).await,
+        "emulator.getEnvironment" => match emulator_get_environment().await {
+            Ok(environment) => host_message(
+                id,
+                "event",
+                json!({
+                    "name": "emulator.getEnvironment.result",
+                    "data": environment
+                }),
+            ),
+            Err(message) => emulator_error(id, message),
+        },
+        "emulator.listImages" => match emulator_list_images(&session.emulator_session).await {
+            Ok(images) => host_message(
+                id,
+                "event",
+                json!({
+                    "name": "emulator.listImages.result",
+                    "data": {
+                        "images": images
+                    }
+                }),
+            ),
+            Err(message) => emulator_error(id, message),
+        },
+        "emulator.listDownloadJobs" => host_message(
+            id,
+            "event",
+            json!({
+                "name": "emulator.listDownloadJobs.result",
+                "data": {
+                    "jobs": emulator_list_download_jobs(&session.emulator_session).await
+                }
+            }),
+        ),
+        "emulator.getCreateDeviceOptions" => {
+            let relative_path = match required_string_arg(&invoke.args, "relativePath") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+
+            match emulator_get_create_device_options(&relative_path).await {
+                Ok(options) => host_message(
+                    id,
+                    "event",
+                    json!({
+                        "name": "emulator.getCreateDeviceOptions.result",
+                        "data": options
+                    }),
+                ),
+                Err(message) => emulator_error(id, message),
+            }
+        }
+        "emulator.downloadImage" => {
+            let relative_path = match required_string_arg(&invoke.args, "relativePath") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+
+            match emulator_download_image(
+                &relative_path,
+                &session.emulator_session,
+                session.outbound_tx.clone(),
+            )
+            .await
+            {
+                Ok(job_id) => host_message(
+                    id,
+                    "event",
+                    json!({
+                        "name": "emulator.downloadImage.result",
+                        "data": {
+                            "jobId": job_id
+                        }
+                    }),
+                ),
+                Err(message) => emulator_error(id, message),
+            }
+        }
+        "emulator.listDevices" => match emulator_list_devices().await {
+            Ok(devices) => host_message(
+                id,
+                "event",
+                json!({
+                    "name": "emulator.listDevices.result",
+                    "data": {
+                        "devices": devices
+                    }
+                }),
+            ),
+            Err(message) => emulator_error(id, message),
+        },
+        "emulator.createDevice" => {
+            let relative_path = match required_string_arg(&invoke.args, "relativePath") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+            let product_device_type = match required_string_arg(&invoke.args, "productDeviceType") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+            let product_name = match required_string_arg(&invoke.args, "productName") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+            let name = match required_string_arg(&invoke.args, "name") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+            let cpu_cores = match required_positive_u32_arg(&invoke.args, "cpuCores") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+            let memory_ram_mb = match required_positive_u32_arg(&invoke.args, "memoryRamMb") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+            let data_disk_mb = match required_positive_u32_arg(&invoke.args, "dataDiskMb") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+            let vendor_country = match optional_string_arg(&invoke.args, "vendorCountry") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+            let is_public = match optional_bool_arg(&invoke.args, "isPublic") {
+                Ok(value) => value.unwrap_or(true),
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+
+            match emulator_create_device(EmulatorCreateDeviceArgs {
+                relative_path,
+                product_device_type,
+                product_name,
+                name,
+                cpu_cores,
+                memory_ram_mb,
+                data_disk_mb,
+                vendor_country,
+                is_public,
+            })
+            .await
+            {
+                Ok(device) => host_message(
+                    id,
+                    "event",
+                    json!({
+                        "name": "emulator.createDevice.result",
+                        "data": {
+                            "device": device
+                        }
+                    }),
+                ),
+                Err(message) => emulator_error(id, message),
+            }
+        }
+        "emulator.startDevice" => {
+            let name = match required_string_arg(&invoke.args, "name") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+
+            match emulator_start_device(&name).await {
+                Ok(name) => host_message(
+                    id,
+                    "event",
+                    json!({
+                        "name": "emulator.startDevice.result",
+                        "data": {
+                            "name": name
+                        }
+                    }),
+                ),
+                Err(message) => emulator_error(id, message),
+            }
+        }
+        "emulator.stopDevice" => {
+            let name = match required_string_arg(&invoke.args, "name") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+
+            match emulator_stop_device(&name).await {
+                Ok(name) => host_message(
+                    id,
+                    "event",
+                    json!({
+                        "name": "emulator.stopDevice.result",
+                        "data": {
+                            "name": name
+                        }
+                    }),
+                ),
+                Err(message) => emulator_error(id, message),
+            }
+        }
+        "emulator.deleteDevice" => {
+            let name = match required_string_arg(&invoke.args, "name") {
+                Ok(value) => value,
+                Err(message) => {
+                    return host_message(
+                        id,
+                        "error",
+                        json!({
+                            "code": "INVALID_ARGS",
+                            "message": message
+                        }),
+                    )
+                }
+            };
+
+            match emulator_delete_device(&name).await {
+                Ok(name) => host_message(
+                    id,
+                    "event",
+                    json!({
+                        "name": "emulator.deleteDevice.result",
+                        "data": {
+                            "name": name
+                        }
+                    }),
+                ),
+                Err(message) => emulator_error(id, message),
+            }
+        }
         _ => host_message(
             id,
             "error",
@@ -2354,6 +2743,28 @@ invalid row
     }
 
     #[tokio::test]
+    async fn handle_invoke_reports_emulator_capability() {
+        let (outbound_tx, _outbound_rx) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+        let mut session = ClientSession::new(outbound_tx);
+
+        let response = handle_invoke(
+            "capabilities-emulator".to_string(),
+            json!({
+                "action": "host.getCapabilities",
+                "args": {}
+            }),
+            &mut session,
+        )
+        .await;
+
+        assert_eq!(response.kind, "event");
+        assert_eq!(
+            response.payload["data"]["capabilities"]["emulator.listImages"],
+            json!(true)
+        );
+    }
+
+    #[tokio::test]
     async fn handle_invoke_returns_builtin_mcp_tool_summaries() {
         let (outbound_tx, _outbound_rx) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
         let mut session = ClientSession::new(outbound_tx);
@@ -2377,6 +2788,26 @@ invalid row
         assert!(tools
             .iter()
             .any(|tool| tool["name"] == "hdc.search_hilog_logs"));
+    }
+
+    #[tokio::test]
+    async fn handle_invoke_returns_empty_emulator_download_jobs_by_default() {
+        let (outbound_tx, _outbound_rx) = mpsc::channel(OUTBOUND_QUEUE_CAPACITY);
+        let mut session = ClientSession::new(outbound_tx);
+
+        let response = handle_invoke(
+            "emulator-jobs".to_string(),
+            json!({
+                "action": "emulator.listDownloadJobs",
+                "args": {}
+            }),
+            &mut session,
+        )
+        .await;
+
+        assert_eq!(response.kind, "event");
+        assert_eq!(response.payload["name"], "emulator.listDownloadJobs.result");
+        assert_eq!(response.payload["data"]["jobs"], json!([]));
     }
 
     #[test]
